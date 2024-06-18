@@ -1,0 +1,2 @@
+# NEATrader
+Neat Trader Bot
