@@ -97,7 +97,7 @@ def training(genomes, config):
 
     best_trader = max(traders, key=lambda trader: trader.credit + (trader.holdings * current_actual_batch[-1][3]))
     print(f"Best trader's total capital this generation: {best_trader.credit + (best_trader.holdings * current_actual_batch[-1][3])}")
-    # STARTING_CAPITAL = best_trader.credit + (best_trader.holdings * current_actual_batch[-1][3])
+    STARTING_CAPITAL = best_trader.credit + (best_trader.holdings * current_actual_batch[-1][3])
     print(f"accumlated total: {STARTING_CAPITAL}")
     print(best_trader.credit_history)
     print(best_trader.holdings_history)
