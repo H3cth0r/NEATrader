@@ -9,8 +9,7 @@ from functionalities import plot_live_data
 # Constants
 STARTING_CAPITAL = 1000
 STARTING_HOLDINGS = 0
-# DATA = StockDataFrame(ticker="MSFT", start="2022-01-01", end="2023-12-31", interval="1d")
-DATA = pd.read_csv("../resources/MSFT_intraday_1min.csv")
+DATA = pd.read_csv("../resources/WSM_intraday_1min.csv")
 DATA['Date'] = pd.to_datetime(DATA['Date'])
 DATA["Adj Close"] = DATA["Close"]
 DATA.set_index('Date', inplace=True)
