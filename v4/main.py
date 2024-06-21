@@ -9,10 +9,7 @@ from functionalities import plot_live_data
 # Constants
 STARTING_CAPITAL = 1000
 STARTING_HOLDINGS = 0
-N_DAYS_BATCH = 4  # Set your batch size in days here
-N_TEST_BATCHES = 2  # Set the number of test batches here
-
-# Load Data
+# DATA = StockDataFrame(ticker="MSFT", start="2022-01-01", end="2023-12-31", interval="1d")
 DATA = pd.read_csv("../resources/MSFT_intraday_1min.csv")
 DATA['Date'] = pd.to_datetime(DATA['Date'])
 DATA["Adj Close"] = DATA["Close"]
@@ -33,26 +30,12 @@ DATA.calculate_MACD(short_window=12, long_window=26, signal_window=9)
 COLUMN_INDEX_DICT = {column_name: index for index, column_name in enumerate(DATA.columns)}
 
 Data_NOT_N = DATA.copy().to_numpy()
-
-# Calculate the number of rows per day
-rows_per_day = DATA.resample('D').size()
-print(rows_per_day)
-
-# Normalize the data
 DATA = DATA.normalize(inplace=False)
 
-# Create batches based on days
-def create_batches(data, n_days):
-    batch_size = rows_per_day.iloc[:n_days].sum()
-    batches = [data[i:i + batch_size] for i in range(0, len(data), batch_size)]
-    return batches
-
-# Split data into training and testing batches
-train_batches = create_batches(DATA, N_DAYS_BATCH * (len(rows_per_day) // (N_DAYS_BATCH + N_TEST_BATCHES)))
-test_batches = create_batches(DATA, N_DAYS_BATCH * N_TEST_BATCHES)
-
-actual_train_batches = create_batches(Data_NOT_N, N_DAYS_BATCH * (len(rows_per_day) // (N_DAYS_BATCH + N_TEST_BATCHES)))
-actual_test_batches = create_batches(Data_NOT_N, N_DAYS_BATCH * N_TEST_BATCHES)
+# Create batches of 4 days each
+batch_size = 1 * 390  # 4 days * 390 minutes (assuming 1-minute intervals for intraday data)
+normalized_batches = [DATA[i:i + batch_size] for i in range(0, len(DATA), batch_size)]
+actual_batches = [Data_NOT_N[i:i + batch_size] for i in range(0, len(Data_NOT_N), batch_size)]
 
 batch_counter = 0
 
@@ -73,9 +56,9 @@ def training(genomes, config):
         ge.append(genome)
 
     # Get the current batch
-    current_normalized_batch = train_batches[batch_counter]
-    current_actual_batch = actual_train_batches[batch_counter]
-    batch_counter = (batch_counter + 1) % len(train_batches)
+    current_normalized_batch = normalized_batches[batch_counter]
+    current_actual_batch = actual_batches[batch_counter]
+    batch_counter = (batch_counter + 1) % len(normalized_batches)
     
     rows_number = len(current_normalized_batch) - 1
     for i in range(10, rows_number):
@@ -125,25 +108,22 @@ def evaluate_best_genome(best_genome, config):
     trader = Trader(credit=STARTING_CAPITAL, holdings=STARTING_HOLDINGS)
     net = neat.nn.FeedForwardNetwork.create(best_genome, config)
 
-    test_batch = test_batches[0]
-    actual_test_batch = actual_test_batches[0]
-    
-    rows_number = len(test_batch) - 1
+    rows_number = len(DATA) - 1
     for i in range(10, rows_number):
         if not trader.check_alive():
             break
-        decision = net.activate(np.append(test_batch[i], trader.credit / 10000))
+        decision = net.activate(np.append(DATA[i], trader.credit / 10000))
 
         # Apply order
         if decision[0] > 0.9:
             if trader.credit >= decision[1] * 10000:
-                trader.buy(decision[1] * 10000, actual_test_batch[i+1][3])
+                trader.buy(decision[1] * 10000, Data_NOT_N[i+1][3])
         elif decision[0] < 0.1:
-            if trader.holdings >= (decision[1] * 10000) / actual_test_batch[i+1][3]:
-                trader.sell(decision[1] * 10000, actual_test_batch[i+1][3])
+            if trader.holdings >= (decision[1] * 10000) / Data_NOT_N[i+1][3]:
+                trader.sell(decision[1] * 10000, Data_NOT_N[i+1][3])
 
     final_credit = trader.credit
-    final_holdings_value = trader.holdings * actual_test_batch[-1][3]
+    final_holdings_value = trader.holdings * Data_NOT_N[-1][3]
     total_capital = final_credit + final_holdings_value
 
     return total_capital, final_credit, final_holdings_value, trader.credit_history, trader.holdings_history
@@ -180,4 +160,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
