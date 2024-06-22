@@ -14,6 +14,8 @@ class Trader:
         self.credit_history = []
         self.holdings_history = []
 
+        self.log_history = []
+
     def check_alive(self):
         self.is_alive = self.credit > 0
         return self.is_alive
@@ -26,6 +28,7 @@ class Trader:
         self.check_alive()
         self.credit_history.append(self.credit)
         self.holdings_history.append(self.holdings)
+        self.log_history.append(1)
 
     def sell(self, quantity, price):
         self.past_credit = self.credit
@@ -35,6 +38,7 @@ class Trader:
         self.check_alive()
         self.credit_history.append(self.credit)
         self.holdings_history.append(self.holdings)
+        self.log_history.append(0)
 
     def update_state(self, new_state):
         self.current_state = new_state
