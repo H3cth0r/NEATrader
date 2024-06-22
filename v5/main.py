@@ -146,13 +146,13 @@ def evaluate_best_genome(best_genome, config):
 
             # Apply order
             if decision[0] > 0.6:
-                print(f"buy: {decision[1]}")
+                # print(f"buy: {decision[1]}")
                 if trader.credit >= decision[1] * 10000:
                     trader.buy(decision[1] * 10000, not_n_test_batch[i+1][3])
             elif decision[0] < 0.4:
-                print(f"sell: {decision[1]}")
+                # print(f"sell: {decision[1]}")
                 if trader.holdings >= (decision[1] * 10000) / not_n_test_batch[i+1][3]:
-                    print("BBBBBB")
+                    # print("BBBBBB")
                     trader.sell(decision[1] * 10000, not_n_test_batch[i+1][3])
 
         STARTING_CAPITAL = trader.credit
@@ -180,7 +180,7 @@ def run(config_path):
     stats = neat.StatisticsReporter()
     population.add_reporter(stats)
 
-    number_of_generations = 10
+    number_of_generations = 4
     winner = population.run(training, number_of_generations)
 
     print(f"\nBest genome: \n{winner}")
