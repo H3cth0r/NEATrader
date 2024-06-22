@@ -3,14 +3,15 @@ import pandas as pd
 from statisco import StockDataFrame
 from trader import Trader
 import neat
+from collections import Counter
 
 from functionalities import plot_live_data
 
 # Constants
 STARTING_CAPITAL = 1000
 STARTING_HOLDINGS = 0
-N_DAYS_BATCH = 5
-TEST_PERCENTAGE = 0.4
+N_DAYS_BATCH = 4
+TEST_PERCENTAGE = 0.2
 CONFIG_FILE = "./config-feedforward"
 
 # Load Data
@@ -46,12 +47,14 @@ def create_batches(data, batches_sizes):
         batches.append(data[pre_i:pre_i+batch_s])
         pre_i += batch_s
     return batches
-btchs = np.array([ROWS_PER_DAY[btch:btch+4].sum() for btch in range(0, len(ROWS_PER_DAY), 4)])
+btchs = np.array([ROWS_PER_DAY[btch:btch+N_DAYS_BATCH].sum() for btch in range(0, len(ROWS_PER_DAY), N_DAYS_BATCH)])
 calc_batch_range = lambda test_size, btch_list: (int((1-test_size) * len(btch_list)),int(-(test_size * len(btch_list))))
 train_btch_range, test_btch_range = calc_batch_range(TEST_PERCENTAGE, btchs)
 
 train_batch_size = btchs[:test_btch_range]
 test_batch_size = btchs[test_btch_range:]
+print(train_batch_size)
+print(test_batch_size)
 
 # Create batches
 train_batches = create_batches(DATA[:train_batch_size.sum()], train_batch_size)
@@ -126,6 +129,7 @@ def training(genomes, config):
     print(f"accumlated total: {STARTING_CAPITAL}")
     print(best_trader.credit_history)
     print(best_trader.holdings_history)
+    print(Counter(best_trader.log_history))
 
 def evaluate_best_genome(best_genome, config):
     STARTING_CAPITAL = 1000
