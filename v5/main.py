@@ -1,3 +1,4 @@
+# main.py
 import numpy as np
 import pandas as pd
 from statisco import StockDataFrame

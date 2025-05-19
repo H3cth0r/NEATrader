@@ -1,3 +1,4 @@
+# trader.py
 import numpy as np
 
 class Trader:

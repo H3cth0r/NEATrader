@@ -18,6 +18,6 @@ pkgs.mkShell {
     source venv/bin/activate
     
     # Install neat-python
-    pip install --quiet neat-python
+    pip install --quiet neat-python yfinance scikit-learn plotly ta
   '';
 }
