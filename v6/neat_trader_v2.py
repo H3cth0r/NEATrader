@@ -8,7 +8,7 @@ import neat
 import os
 import pickle 
 import random 
-import copy 
+import copy
 
 from trader import Trader 
 from functionalities import plot_backtest_results, plot_generational_performance
@@ -22,12 +22,12 @@ INITIAL_STARTING_CAPITAL = 200.0
 INITIAL_STARTING_HOLDINGS = 0.0 
 N_LAGS = 5 
 CONFIG_FILE_PATH = "./config-feedforward"
-N_GENERATIONS = 100 
+N_GENERATIONS = 50 
 MAX_EXPECTED_CREDIT = INITIAL_STARTING_CAPITAL * 10 
 MAX_EXPECTED_HOLDINGS_VALUE = INITIAL_STARTING_CAPITAL * 10
 PLOT_BEST_OF_GENERATION_EVERY = 15 
 TRADING_FEE_PERCENT = 0.001 
-EVAL_WINDOW_SIZE_MINUTES = 24 * 60 
+EVAL_WINDOW_SIZE_MINUTES = 18 * 60 # 18-hour window, can experiment with 12 or 24
 
 _COLUMN_NAMES_RESOLVED_FOR_CURRENT_FETCH = False
 COL_OPEN, COL_HIGH, COL_LOW, COL_CLOSE, COL_VOLUME = 'Open', 'High', 'Low', 'Close', 'Volume'
@@ -37,31 +37,26 @@ best_record_breaker_genome_obj = None
 best_record_breaker_fitness_val = -float('inf') 
 
 # --- Custom NEAT Reporter ---
-class GenerationReporter(neat.reporting.BaseReporter):
+class GenerationReporter(neat.reporting.BaseReporter): # (Keep as in previous "KeyError" fix version)
     def __init__(self, plot_interval, train_data_scaled, train_data_raw, neat_config, initial_capital, trading_fee):
         super().__init__() 
-        print("<<<<< GenerationReporter __init__ CALLED >>>>>") 
         self.plot_interval = plot_interval; self.generation_count = 0
         self.train_data_scaled_for_reporter = train_data_scaled
         self.train_data_raw_for_reporter = train_data_raw 
         self.neat_config = neat_config; self.initial_capital = initial_capital
         self.trading_fee = trading_fee
-        
         self.best_fitness_so_far_in_run = -float('inf') 
         self.best_genome_overall_obj = None 
-
         self.generations_list = []
-        # CORRECTED and EXPANDED Keys
         self.metrics_history = {
-            "Best Fitness (Window)": [], 
-            "Max Portfolio Ever ($) (Training Record)": [],
+            "Best Fitness (Window)": [], "Max Portfolio Ever ($) (Training Record)": [],
             "Best Gen Genome's Portfolio ($) (Full Train Sim)": [],
             "Best Gen Genome's Net Profit ($) (Full Train Sim)": [],
-            "Best Gen Genome's Credit ($) (Full Train Sim)": [],      # ADDED BACK
-            "Best Gen Genome's Total Trades (Full Train Sim)": [],   # ADDED BACK
-            "Best Gen Genome's Buys (Full Train Sim)": [],           # NEW
-            "Best Gen Genome's Sells (Full Train Sim)": [],          # NEW
-            "Best Gen Genome's Fees Paid ($) (Full Train Sim)": []   # NEW
+            "Best Gen Genome's Credit ($) (Full Train Sim)": [],      
+            "Best Gen Genome's Total Trades (Full Train Sim)": [],  
+            "Best Gen Genome's Buys (Full Train Sim)": [],          
+            "Best Gen Genome's Sells (Full Train Sim)": [],         
+            "Best Gen Genome's Fees Paid ($) (Full Train Sim)": []   
         }
 
     def start_generation(self, generation):
@@ -92,7 +87,6 @@ class GenerationReporter(neat.reporting.BaseReporter):
         
     def _actual_end_of_generation_logic(self, config, population_genomes_dict, species_set_object):
         global max_portfolio_ever_achieved_in_training, best_record_breaker_genome_obj, best_record_breaker_fitness_val
-        # print(f"  --- Reporter Logic for Gen {self.generation_count} Starting ---")
         best_genome_this_gen, best_fitness_this_gen = None, -float('inf')
         all_current_genomes = list(population_genomes_dict.values())
         for g in all_current_genomes: 
@@ -108,10 +102,9 @@ class GenerationReporter(neat.reporting.BaseReporter):
 
         if best_genome_this_gen:
             self.metrics_history["Best Fitness (Window)"].append(best_fitness_this_gen)
-            
             net = neat.nn.FeedForwardNetwork.create(best_genome_this_gen, self.neat_config)
             rep_trader = Trader(self.initial_capital, INITIAL_STARTING_HOLDINGS, trading_fee_percent=self.trading_fee) 
-            buys_rep_sim, sells_rep_sim = 0,0 # Specific counts for this simulation
+            buys_rep_sim, sells_rep_sim = 0,0 
             for i in range(len(self.train_data_scaled_for_reporter)): 
                 if not rep_trader.is_alive: break
                 feat, price, ts = self.train_data_scaled_for_reporter[i], self.train_data_raw_for_reporter.iloc[i][COL_CLOSE], self.train_data_raw_for_reporter.index[i]
@@ -122,25 +115,23 @@ class GenerationReporter(neat.reporting.BaseReporter):
                 elif action < 0.4: 
                     if rep_trader.sell(amount * rep_trader.holdings_shares, price, ts): sells_rep_sim +=1
                 rep_trader.update_history(ts, price) 
-            
             final_pf_rep = rep_trader.get_portfolio_value(self.train_data_raw_for_reporter.iloc[-1][COL_CLOSE])
             net_profit_rep = final_pf_rep - self.initial_capital
             
             if rep_trader.max_portfolio_value_achieved > max_portfolio_ever_achieved_in_training:
                 max_portfolio_ever_achieved_in_training = rep_trader.max_portfolio_value_achieved
-                # Store the genome that achieved this on the FULL TRAIN SIM, not just its window fitness
                 best_record_breaker_genome_obj = copy.deepcopy(best_genome_this_gen) 
-                best_record_breaker_fitness_val = best_fitness_this_gen # Store its original window fitness for reference
+                best_record_breaker_fitness_val = best_fitness_this_gen 
                 print(f"    REPORTER: !!! NEW GLOBAL MAX PORTFOLIO RECORD (on Full Train Sim): ${max_portfolio_ever_achieved_in_training:.2f} by Gen {self.generation_count} Best (ID {best_genome_this_gen.key}) !!!")
 
             self.metrics_history["Max Portfolio Ever ($) (Training Record)"].append(max_portfolio_ever_achieved_in_training)
             self.metrics_history["Best Gen Genome's Portfolio ($) (Full Train Sim)"].append(final_pf_rep)
             self.metrics_history["Best Gen Genome's Net Profit ($) (Full Train Sim)"].append(net_profit_rep)
-            self.metrics_history["Best Gen Genome's Credit ($) (Full Train Sim)"].append(rep_trader.credit) # APPENDING
-            self.metrics_history["Best Gen Genome's Total Trades (Full Train Sim)"].append(len(rep_trader.trade_log)) # APPENDING
-            self.metrics_history["Best Gen Genome's Buys (Full Train Sim)"].append(buys_rep_sim) # APPENDING
-            self.metrics_history["Best Gen Genome's Sells (Full Train Sim)"].append(sells_rep_sim) # APPENDING
-            self.metrics_history["Best Gen Genome's Fees Paid ($) (Full Train Sim)"].append(rep_trader.total_fees_paid) # APPENDING
+            self.metrics_history["Best Gen Genome's Credit ($) (Full Train Sim)"].append(rep_trader.credit)
+            self.metrics_history["Best Gen Genome's Total Trades (Full Train Sim)"].append(len(rep_trader.trade_log))
+            self.metrics_history["Best Gen Genome's Buys (Full Train Sim)"].append(buys_rep_sim)
+            self.metrics_history["Best Gen Genome's Sells (Full Train Sim)"].append(sells_rep_sim)
+            self.metrics_history["Best Gen Genome's Fees Paid ($) (Full Train Sim)"].append(rep_trader.total_fees_paid)
             
             print(f"    REPORTER Gen {self.generation_count} Best (ID {best_genome_this_gen.key}, WindowFit: {best_fitness_this_gen:.2f}) "
                   f"SimOnFullTrain: NetProfit: ${net_profit_rep:.2f}, Pf: ${final_pf_rep:.2f}, Cr: ${rep_trader.credit:.2f}, "
@@ -170,16 +161,16 @@ class GenerationReporter(neat.reporting.BaseReporter):
     def info(self, msg): pass 
     def plot_generational_metrics(self): 
         print("<<<<< GenerationReporter plot_generational_metrics CALLED >>>>>")
-        # Select all defined metrics for plotting, as they are now all specific to "Best Gen Genome's Full Train Sim" or global records
-        metrics_to_plot = self.metrics_history
+        metrics_to_plot = {k: v for k, v in self.metrics_history.items() if "Full Train Sim" in k or "Best Fitness" in k or "Max Portfolio Ever" in k}
         if self.generations_list and any(len(v) > 0 for v in metrics_to_plot.values()):
             valid_metrics_history = {k: v for k, v in metrics_to_plot.items() if not all(np.isnan(val) if isinstance(val, float) else False for val in v)}
             if valid_metrics_history:
-                 plot_generational_performance(self.generations_list, valid_metrics_history, title="Key Metrics for Best Genome Per Generation")
+                 plot_generational_performance(self.generations_list, valid_metrics_history, title="Key Metrics Per Generation")
             else: print("No valid generational metrics data to plot (all NaNs).")
         else: print("No generational data accumulated to plot.")
 
 # --- Helper Functions (KEEP AS IS) ---
+# ... (resolve_column_names, fetch_data, calculate_technical_indicators, add_lagged_features, split_data_by_days, normalize_data) ...
 def resolve_column_names(df_columns, ticker_symbol_str): # (Keep this function as previously corrected)
     global COL_OPEN, COL_HIGH, COL_LOW, COL_CLOSE, COL_VOLUME, _COLUMN_NAMES_RESOLVED_FOR_CURRENT_FETCH
     if _COLUMN_NAMES_RESOLVED_FOR_CURRENT_FETCH: return
@@ -278,16 +269,18 @@ train_data_scaled_np_global = None
 train_data_raw_global = None 
 train_data_indices_global = None 
 
-# --- FITNESS FUNCTION (Using the "Profit Target / Survival First" from your previous request's output) ---
-# This is the fitness function that produced the logs you just sent, leading to stagnation.
-# We will now replace this with the new "Record Breaker" fitness function.
-def eval_genomes(genomes, config): # THIS IS THE "Profit Target" version you were running
-    global train_data_scaled_np_global, train_data_raw_global, current_eval_window_start_index 
+# --- FITNESS FUNCTION (NEW: "Breakthrough Profit Targets") ---
+def eval_genomes(genomes, config):
+    global train_data_scaled_np_global, train_data_raw_global, current_eval_window_start_index, \
+           max_portfolio_ever_achieved_in_training # Use this global record
+
     if train_data_scaled_np_global is None: raise RuntimeError("Train data not set.")
+
     full_train_len = len(train_data_scaled_np_global)
     window_size_for_eval = EVAL_WINDOW_SIZE_MINUTES 
     if window_size_for_eval >= full_train_len or window_size_for_eval <= 10 : 
         window_size_for_eval = max(10, full_train_len // 2) 
+    
     start_idx_for_this_gen_eval = current_eval_window_start_index
     end_idx_for_this_gen_eval = min(start_idx_for_this_gen_eval + window_size_for_eval, full_train_len)
     if (end_idx_for_this_gen_eval - start_idx_for_this_gen_eval) < min(10, window_size_for_eval / 2) :
@@ -295,165 +288,115 @@ def eval_genomes(genomes, config): # THIS IS THE "Profit Target" version you wer
              start_idx_for_this_gen_eval = max(0, full_train_len - window_size_for_eval -1)
         else: start_idx_for_this_gen_eval = 0
         end_idx_for_this_gen_eval = min(start_idx_for_this_gen_eval + window_size_for_eval, full_train_len)
+
     current_eval_scaled_data = train_data_scaled_np_global[start_idx_for_this_gen_eval : end_idx_for_this_gen_eval]
     current_eval_raw_data_df = train_data_raw_global.iloc[start_idx_for_this_gen_eval : end_idx_for_this_gen_eval]
+
     if len(current_eval_scaled_data) < 10: 
         for _, genome in genomes: genome.fitness = -1e12 
         return
-    PROFIT_TARGET_BREAKEVEN = 0.001; PROFIT_TARGET_SMALL_WIN = 0.01; PROFIT_TARGET_GOOD_WIN = 0.03; PROFIT_TARGET_GREAT_WIN = 0.05
-    MAX_ACCEPTABLE_LOSS_RATIO = 0.15; base_reward_unit = INITIAL_STARTING_CAPITAL 
+
+    # Define profit targets as ratios of initial capital for the window
+    # These are ambitious targets for a single window.
+    PROFIT_TARGET_BREAKEVEN = 0.002 # 0.2% (must at least beat fees consistently)
+    PROFIT_TARGET_MODEST = 0.015   # 1.5%
+    PROFIT_TARGET_GOOD = 0.03     # 3%
+    PROFIT_TARGET_EXCEPTIONAL = 0.07 # 7%
+    
+    # Define multipliers for fitness rewards
+    FITNESS_SCALE_FACTOR = INITIAL_STARTING_CAPITAL * 100 # Base for scaling rewards (e.g., 200 * 100 = 20000)
+
     for genome_id, genome in genomes:
         net = neat.nn.FeedForwardNetwork.create(genome, config)
         trader = Trader(INITIAL_STARTING_CAPITAL, INITIAL_STARTING_HOLDINGS, trading_fee_percent=TRADING_FEE_PERCENT) 
-        genome.fitness = 0.0; num_buys, num_sells, num_profitable_sells = 0,0,0
+        genome.fitness = 0.0 
+        num_buys, num_sells, num_profitable_sells = 0,0,0
+        
+        window_peak_portfolio = INITIAL_STARTING_CAPITAL
+
         for i in range(len(current_eval_scaled_data)): 
             if not trader.is_alive: break
-            features, price, ts = current_eval_scaled_data[i], current_eval_raw_data_df.iloc[i][COL_CLOSE], current_eval_raw_data_df.index[i]
+            features = current_eval_scaled_data[i]
+            price = current_eval_raw_data_df.iloc[i][COL_CLOSE] 
+            ts = current_eval_raw_data_df.index[i]
             state = trader.get_state_for_nn(price, MAX_EXPECTED_CREDIT, MAX_EXPECTED_HOLDINGS_VALUE)
             nn_in = np.concatenate((features, state)); action, amount = net.activate(nn_in)
+            
             if action > 0.55: 
                 if trader.buy(amount * trader.credit, price, ts): num_buys+=1
             elif action < 0.45: 
                 old_gains = trader.realized_gains_this_evaluation
                 if trader.sell(amount * trader.holdings_shares, price, ts):
-                    num_sells+=1; profit_this_trade = trader.realized_gains_this_evaluation - old_gains
-                    if profit_this_trade > (TRADING_FEE_PERCENT * price * (amount * trader.holdings_shares if trader.holdings_shares > 0 and amount > 0 else INITIAL_STARTING_CAPITAL*0.001) + 0.01): num_profitable_sells+=1 
+                    num_sells+=1
+                    profit_this_trade = trader.realized_gains_this_evaluation - old_gains
+                    if profit_this_trade > (TRADING_FEE_PERCENT * price * (amount * trader.holdings_shares if trader.holdings_shares > 0 and amount > 0 else INITIAL_STARTING_CAPITAL*0.002) + 0.02): # Profit must be >~0.02 + fees
+                        num_profitable_sells+=1 
             trader.update_history(ts, price)
+            current_step_portfolio = trader.get_portfolio_value(price)
+            if current_step_portfolio > window_peak_portfolio:
+                window_peak_portfolio = current_step_portfolio # Track peak within this genome's eval
+        
         final_portfolio = trader.get_portfolio_value(current_eval_raw_data_df.iloc[-1][COL_CLOSE])
-        final_credit = trader.credit; total_trades = num_buys + num_sells
+        final_credit = trader.credit
+        total_trades = num_buys + num_sells
         net_profit_abs = final_portfolio - INITIAL_STARTING_CAPITAL
         profit_ratio = net_profit_abs / INITIAL_STARTING_CAPITAL if INITIAL_STARTING_CAPITAL > 0 else 0.0
+        
+        # --- FITNESS ---
         fitness_score = 0.0
-        if profit_ratio < -MAX_ACCEPTABLE_LOSS_RATIO: fitness_score = -10000.0 * (1 + abs(profit_ratio)); genome.fitness = fitness_score; continue 
-        if final_credit < INITIAL_STARTING_CAPITAL * 0.05: fitness_score = -base_reward_unit * 50.0; genome.fitness = fitness_score; continue
-        if profit_ratio >= PROFIT_TARGET_GREAT_WIN: fitness_score += base_reward_unit*100 + (profit_ratio-PROFIT_TARGET_GREAT_WIN)*base_reward_unit*200
-        elif profit_ratio >= PROFIT_TARGET_GOOD_WIN: fitness_score += base_reward_unit*50 + (profit_ratio-PROFIT_TARGET_GOOD_WIN)*base_reward_unit*100
-        elif profit_ratio >= PROFIT_TARGET_SMALL_WIN: fitness_score += base_reward_unit*20 + (profit_ratio-PROFIT_TARGET_SMALL_WIN)*base_reward_unit*50
-        elif profit_ratio > PROFIT_TARGET_BREAKEVEN: fitness_score += base_reward_unit*5 + profit_ratio*base_reward_unit*20
-        elif profit_ratio > -0.005 : fitness_score += profit_ratio*base_reward_unit*10 
-        else: fitness_score += profit_ratio*base_reward_unit*50 
-        if final_credit < (INITIAL_STARTING_CAPITAL*0.20):
-            if profit_ratio < PROFIT_TARGET_SMALL_WIN : fitness_score -= INITIAL_STARTING_CAPITAL*5
-            else: fitness_score -= INITIAL_STARTING_CAPITAL*1
-        elif final_credit > INITIAL_STARTING_CAPITAL*1.5 and profit_ratio > PROFIT_TARGET_SMALL_WIN: fitness_score += (final_credit-INITIAL_STARTING_CAPITAL)*0.5 
-        if num_profitable_sells > 0 and trader.realized_gains_this_evaluation > 0: fitness_score += (trader.realized_gains_this_evaluation/INITIAL_STARTING_CAPITAL)*base_reward_unit*1
-        if profit_ratio < PROFIT_TARGET_GOOD_WIN: 
-            max_trades_allowed = max(3, len(current_eval_scaled_data)//10)
-            if total_trades > max_trades_allowed and profit_ratio < 0.005 : fitness_score -= (total_trades-max_trades_allowed)*(base_reward_unit*0.02)
-            if total_trades < 2 and profit_ratio < PROFIT_TARGET_BREAKEVEN: fitness_score -= base_reward_unit*2
-            if num_buys > 0 and num_sells == 0 and final_portfolio < (INITIAL_STARTING_CAPITAL*(1+PROFIT_TARGET_BREAKEVEN)): fitness_score -= base_reward_unit*0.5
+
+        # 1. SURVIVAL & LIQUIDITY GATES (applied first)
+        if final_portfolio < INITIAL_STARTING_CAPITAL * 0.70: # Lost > 30%
+            fitness_score = -FITNESS_SCALE_FACTOR * 200.0 # Extremely punitive
+            genome.fitness = fitness_score; continue 
+        if final_credit < INITIAL_STARTING_CAPITAL * 0.05: # Less than 5% cash
+            fitness_score = -FITNESS_SCALE_FACTOR * 100.0
+            genome.fitness = fitness_score; continue 
+
+        # 2. "BEAT GLOBAL RECORD" (Portfolio Peak) INCENTIVE
+        #    This is a strong bonus if the genome achieved a new all-time high portfolio value
+        #    during its window AND ended profitably.
+        if window_peak_portfolio > max_portfolio_ever_achieved_in_training and profit_ratio > PROFIT_TARGET_BREAKEVEN:
+            # Bonus scales with how much the record was beaten (as a ratio of initial capital)
+            record_improvement_ratio = (window_peak_portfolio - max_portfolio_ever_achieved_in_training) / INITIAL_STARTING_CAPITAL
+            fitness_score += (record_improvement_ratio ** 1.2) * FITNESS_SCALE_FACTOR * 10.0 # Huge exponential bonus
+            fitness_score += FITNESS_SCALE_FACTOR * 5.0 # Flat substantial bonus for breaking it
+            # print(f"    Gen {self.generation_count} Genome {genome_id} broke global record! Peak: ${window_peak_portfolio:.2f}, Fitness Bonus: significant")
+
+        # 3. TIERED NET PROFIT REWARDS (Primary reward if not breaking global records or after it)
+        #    This gives a base level of reward for achieving different tiers of profitability.
+        if profit_ratio >= PROFIT_TARGET_EXCEPTIONAL: # > 7%
+            fitness_score += (profit_ratio ** 1.5) * FITNESS_SCALE_FACTOR * 3.0 # Very high scaling
+        elif profit_ratio >= PROFIT_TARGET_GOOD:     # > 3%
+            fitness_score += (profit_ratio ** 1.3) * FITNESS_SCALE_FACTOR * 2.0
+        elif profit_ratio >= PROFIT_TARGET_MODEST:   # > 1.5%
+            fitness_score += profit_ratio * FITNESS_SCALE_FACTOR * 1.5
+        elif profit_ratio > PROFIT_TARGET_BREAKEVEN: # > 0.2% (just above fees)
+            fitness_score += profit_ratio * FITNESS_SCALE_FACTOR * 0.5 # Small reward for just being profitable
+        elif profit_ratio > -0.01: # Tiny loss, effectively breakeven
+            fitness_score += profit_ratio * FITNESS_SCALE_FACTOR * 0.2 # Small negative (close to zero)
+        else: # More significant loss (but not catastrophic)
+            fitness_score -= (abs(profit_ratio) ** 1.1) * FITNESS_SCALE_FACTOR * 3.0 # Strong penalty
+
+        # 4. REALIZED PROFIT & CREDIT (Secondary bonuses, only if already decent)
+        if fitness_score > 0: # Only add these if the core performance wasn't terrible
+            # Bonus for significant realized PnL
+            if trader.realized_gains_this_evaluation > (INITIAL_STARTING_CAPITAL * 0.01): # >1% realized
+                fitness_score += (trader.realized_gains_this_evaluation / INITIAL_STARTING_CAPITAL) * FITNESS_SCALE_FACTOR * 0.1
+            # Bonus for good ending credit if also profitable
+            if profit_ratio > PROFIT_TARGET_BREAKEVEN and final_credit > INITIAL_STARTING_CAPITAL * 0.5:
+                fitness_score += ((final_credit / INITIAL_STARTING_CAPITAL) - 0.5) * FITNESS_SCALE_FACTOR * 0.1
+        
+        # 5. PENALTIES for consistently bad habits (even if some profit target was met by luck)
+        #    These are smaller deductions from an already established score.
+        max_safe_trades = max(3, len(current_eval_scaled_data) // 12)
+        if total_trades == 0 and profit_ratio < PROFIT_TARGET_BREAKEVEN: # Did nothing AND didn't profit
+            fitness_score -= FITNESS_SCALE_FACTOR * 0.5
+        elif total_trades > max_safe_trades and profit_ratio < PROFIT_TARGET_MODEST: # Churning for low profit
+            fitness_score -= (total_trades - max_safe_trades) * (FITNESS_SCALE_FACTOR * 0.0005) * total_trades
+
         genome.fitness = fitness_score
         if np.isnan(genome.fitness) or np.isinf(genome.fitness): genome.fitness = -1e12
-
-
-# --- FITNESS FUNCTION (NEW: "Record Breaker" & Push for Higher Peaks) ---
-# def eval_genomes(genomes, config): # UNCOMMENT THIS NEW ONE and COMMENT OUT THE ONE ABOVE
-#     global train_data_scaled_np_global, train_data_raw_global, current_eval_window_start_index, \
-#            max_portfolio_ever_achieved_in_training # Access global record
-
-#     if train_data_scaled_np_global is None: raise RuntimeError("Train data not set.")
-
-#     full_train_len = len(train_data_scaled_np_global)
-#     window_size_for_eval = EVAL_WINDOW_SIZE_MINUTES 
-#     if window_size_for_eval >= full_train_len or window_size_for_eval <= 10 : 
-#         window_size_for_eval = max(10, full_train_len // 2) 
-    
-#     start_idx_for_this_gen_eval = current_eval_window_start_index
-#     end_idx_for_this_gen_eval = min(start_idx_for_this_gen_eval + window_size_for_eval, full_train_len)
-#     if (end_idx_for_this_gen_eval - start_idx_for_this_gen_eval) < min(10, window_size_for_eval / 2) :
-#         if full_train_len > window_size_for_eval :
-#              start_idx_for_this_gen_eval = max(0, full_train_len - window_size_for_eval -1)
-#         else: start_idx_for_this_gen_eval = 0
-#         end_idx_for_this_gen_eval = min(start_idx_for_this_gen_eval + window_size_for_eval, full_train_len)
-
-#     current_eval_scaled_data = train_data_scaled_np_global[start_idx_for_this_gen_eval : end_idx_for_this_gen_eval]
-#     current_eval_raw_data_df = train_data_raw_global.iloc[start_idx_for_this_gen_eval : end_idx_for_this_gen_eval]
-
-#     if len(current_eval_scaled_data) < 10: 
-#         for _, genome in genomes: genome.fitness = -1e12 
-#         return
-
-#     FITNESS_SCALING_FACTOR = INITIAL_STARTING_CAPITAL * 100 # Larger base for fitness scores
-
-#     for genome_id, genome in genomes:
-#         net = neat.nn.FeedForwardNetwork.create(genome, config)
-#         trader = Trader(INITIAL_STARTING_CAPITAL, INITIAL_STARTING_HOLDINGS, trading_fee_percent=TRADING_FEE_PERCENT) 
-#         genome.fitness = 0.0 
-#         num_buys, num_sells, num_profitable_sells = 0,0,0
-        
-#         # Max portfolio reached in THIS specific genome's evaluation window
-#         # This is trader.max_portfolio_value_achieved which is reset for each trader instance
-        
-#         for i in range(len(current_eval_scaled_data)): 
-#             if not trader.is_alive: break
-#             features = current_eval_scaled_data[i]
-#             price = current_eval_raw_data_df.iloc[i][COL_CLOSE] 
-#             ts = current_eval_raw_data_df.index[i]
-#             state = trader.get_state_for_nn(price, MAX_EXPECTED_CREDIT, MAX_EXPECTED_HOLDINGS_VALUE)
-#             nn_in = np.concatenate((features, state)); action, amount = net.activate(nn_in)
-            
-#             if action > 0.55: # BUY
-#                 if trader.buy(amount * trader.credit, price, ts): num_buys+=1
-#             elif action < 0.45: # SELL
-#                 old_gains = trader.realized_gains_this_evaluation
-#                 if trader.sell(amount * trader.holdings_shares, price, ts):
-#                     num_sells+=1
-#                     profit_this_trade = trader.realized_gains_this_evaluation - old_gains
-#                     if profit_this_trade > (TRADING_FEE_PERCENT * INITIAL_STARTING_CAPITAL * 0.01): # Must be somewhat significant
-#                         num_profitable_sells+=1 
-#             trader.update_history(ts, price) # This also updates trader.max_portfolio_value_achieved
-        
-#         final_portfolio = trader.get_portfolio_value(current_eval_raw_data_df.iloc[-1][COL_CLOSE])
-#         final_credit = trader.credit
-#         total_trades = num_buys + num_sells
-#         net_profit_abs = final_portfolio - INITIAL_STARTING_CAPITAL
-#         profit_ratio = net_profit_abs / INITIAL_STARTING_CAPITAL if INITIAL_STARTING_CAPITAL > 0 else 0.0
-#         window_peak_portfolio = trader.max_portfolio_value_achieved # Peak during this sim
-
-#         # --- FITNESS ---
-#         fitness_score = 0.0
-
-#         # 1. SURVIVAL PENALTIES (applied first, can override other scores)
-#         if final_portfolio < INITIAL_STARTING_CAPITAL * 0.70: # Lost > 30%
-#             fitness_score = -FITNESS_SCALING_FACTOR * 100.0 
-#             genome.fitness = fitness_score; continue 
-#         if final_credit < INITIAL_STARTING_CAPITAL * 0.05: 
-#             fitness_score = -FITNESS_SCALING_FACTOR * 50.0
-#             genome.fitness = fitness_score; continue 
-
-#         # 2. PRIMARY GOAL: EXCEEDING THE GLOBAL BEST PORTFOLIO EVER SEEN
-#         #    And achieving a good net profit in the current window.
-#         record_beaten_bonus = 0.0
-#         if window_peak_portfolio > max_portfolio_ever_achieved_in_training and profit_ratio > 0.01: # Must beat record AND be >1% profitable
-#             how_much_beat_record_ratio = (window_peak_portfolio - max_portfolio_ever_achieved_in_training) / INITIAL_STARTING_CAPITAL
-#             record_beaten_bonus = (how_much_beat_record_ratio ** 1.2) * FITNESS_SCALING_FACTOR * 5.0 # Exponential bonus
-#             record_beaten_bonus += FITNESS_SCALING_FACTOR * 2.0 # Flat bonus for breaking record
-#             # print(f"DEBUG Gen {self.generation_count} Genome {genome_id} BEAT RECORD! Peak {window_peak_portfolio:.2f} vs Global {max_portfolio_ever_achieved_in_training:.2f}. Bonus: {record_beaten_bonus:.2f}")
-        
-#         fitness_score += record_beaten_bonus
-
-#         # 3. NET PROFIT RATIO (Still important, especially if not breaking records)
-#         #    This provides a gradient for general improvement.
-#         if profit_ratio > 0:
-#             fitness_score += (profit_ratio ** 1.3) * FITNESS_SCALING_FACTOR * 1.0 # Slightly less emphasis than record breaking
-#         else: # Penalize losses if no record broken
-#             fitness_score -= (abs(profit_ratio) ** 1.1) * FITNESS_SCALING_FACTOR * 2.0
-        
-#         # 4. INCENTIVE FOR PROFITABLE SELLS (if overall profitable or record broken)
-#         if profit_ratio > 0.005 or record_beaten_bonus > 0: # Only if doing okay overall
-#             if trader.realized_gains_this_evaluation > (INITIAL_STARTING_CAPITAL * 0.005):
-#                  fitness_score += (trader.realized_gains_this_evaluation / INITIAL_STARTING_CAPITAL) * FITNESS_SCALING_SCALE * 0.1
-
-#         # 5. PENALTIES FOR BAD HABITS (applied if not a huge record-breaking winner)
-#         if record_beaten_bonus < FITNESS_SCALING_FACTOR * 1.0 : # If not a strong record break
-#             max_trades = max(3, len(current_eval_scaled_data) // 12)
-#             if total_trades > max_trades and profit_ratio < 0.002: # Churning for <0.2% profit
-#                 fitness_score -= (total_trades - max_trades) * (FITNESS_SCALING_FACTOR * 0.0002) * total_trades
-#             if total_trades < 2 and profit_ratio < 0.001: # Inactivity
-#                 fitness_score -= FITNESS_SCALING_FACTOR * 0.1
-
-#         genome.fitness = fitness_score
-#         if np.isnan(genome.fitness) or np.isinf(genome.fitness): genome.fitness = -1e12
 
 
 def run_simulation_and_plot(genome, config, data_scaled_np, data_raw, title_prefix): # Keep as previously corrected
@@ -535,30 +478,19 @@ def run_neat_trader(config_file): # Keep as previously corrected
     print("\nStarting NEAT evolution..."); 
     pop.run(eval_genomes, N_GENERATIONS) 
     
-    # --- Determine the final winner ---
-    # Priority 1: The genome that broke the global portfolio record (if any and if its own window fitness was decent)
-    # Priority 2: The genome with the highest window fitness seen by GenerationReporter's internal tracking
-    # Priority 3: Fallback to NEAT's population.best_genome if the reporter didn't capture anything (unlikely)
-
-    winner_to_evaluate = None
-    winner_fitness_note = -float('inf')
-    final_report_source = "None"
-
-    if best_record_breaker_genome_obj and best_record_breaker_fitness_val > -1e9: # Check if a record breaker was identified and had a non-catastrophic fitness
+    winner_to_evaluate = None; winner_fitness_note = -float('inf'); final_report_source = "None"
+    if best_record_breaker_genome_obj and best_record_breaker_fitness_val > gen_reporter.best_fitness_so_far_in_run * 0.1 : # Record breaker must have some decent fitness on its own window
+        print(f"INFO: Prioritizing 'Record Breaker' Genome ID {best_record_breaker_genome_obj.key} (Fitness on its record-setting context window: {best_record_breaker_fitness_val:.2f})")
         winner_to_evaluate = best_record_breaker_genome_obj
         winner_fitness_note = best_record_breaker_fitness_val 
-        final_report_source = "Record Breaker (based on its window fitness)"
-        print(f"INFO: Prioritizing 'Record Breaker' Genome ID {winner_to_evaluate.key} (Fitness on its record window: {winner_fitness_note:.2f})")
-    
-    if winner_to_evaluate is None or (gen_reporter.best_genome_overall_obj and gen_reporter.best_fitness_so_far_in_run > winner_fitness_note):
-        if gen_reporter.best_genome_overall_obj:
-            winner_to_evaluate = gen_reporter.best_genome_overall_obj
-            winner_fitness_note = gen_reporter.best_fitness_so_far_in_run
-            final_report_source = "GenerationReporter's Best Overall (by window fitness)"
-            print(f"INFO: Selecting winner from GenerationReporter's best overall: ID {winner_to_evaluate.key}, WindowFit: {winner_fitness_note:.2f}")
-
-    if winner_to_evaluate is None: # Fallback if still no winner
-        print("DEBUG: No winner from reporter or record breaker. Falling back to NEAT's population scan at end.")
+        final_report_source = "Global Record Breaker (Portfolio Peak during Full Train Sim)"
+    elif gen_reporter.best_genome_overall_obj:
+        print(f"INFO: Selecting winner from GenerationReporter's best overall (by window fitness): ID {gen_reporter.best_genome_overall_obj.key}, WindowFit: {gen_reporter.best_fitness_so_far_in_run:.2f}")
+        winner_to_evaluate = gen_reporter.best_genome_overall_obj
+        winner_fitness_note = gen_reporter.best_fitness_so_far_in_run
+        final_report_source = "GenerationReporter's Best (by highest window fitness)"
+    else: 
+        print("DEBUG: No winner from reporter or record breaker. Falling back to NEAT's population scan at end.") # ... (fallback logic) ...
         best_fitness_fallback = -float('inf'); temp_winner_fallback = None
         all_genomes_final_pop = list(pop.population.values()) 
         for g_val_iter in all_genomes_final_pop:
@@ -570,7 +502,8 @@ def run_neat_trader(config_file): # Keep as previously corrected
         if winner_to_evaluate is None: print("CRITICAL ERROR: No winner genome could be determined."); return
         else: print(f"DEBUG: Fallback winner found with fitness {getattr(winner_to_evaluate, 'fitness', 'N/A')}")
 
-    print(f"\nOverall Best Genome Selected ({final_report_source}): ID {winner_to_evaluate.key if winner_to_evaluate else 'N/A'}, Fitness: {winner_fitness_note:.2f if winner_fitness_note != -float('inf') else 'N/A'}")
+
+    print(f"\nOverall Best Genome Selected ({final_report_source}): ID {winner_to_evaluate.key if winner_to_evaluate else 'N/A'}, Fitness Context: {winner_fitness_note:.2f if winner_fitness_note != -float('inf') else 'N/A'}")
     if winner_to_evaluate:
         with open(f"winner_genome_{TICKER}.pkl", "wb") as f: pickle.dump(winner_to_evaluate, f)
         print(f"Saved overall best genome to winner_genome_{TICKER}.pkl")
