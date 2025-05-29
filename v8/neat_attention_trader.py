@@ -25,10 +25,10 @@ INITIAL_STARTING_CAPITAL = 200.0
 INITIAL_STARTING_HOLDINGS = 0.0
 N_LAGS = 2 
 CONFIG_FILE_PATH = "./config-feedforward-attention" 
-N_GENERATIONS = 50
+N_GENERATIONS = 150 
 MAX_EXPECTED_CREDIT = INITIAL_STARTING_CAPITAL * 5 
 MAX_EXPECTED_HOLDINGS_VALUE = INITIAL_STARTING_CAPITAL * 5 
-PLOT_BEST_OF_GENERATION_EVERY = 15 
+PLOT_BEST_OF_GENERATION_EVERY = 10 
 PLOT_WINDOW_PERFORMANCE = True
 TRADING_FEE_PERCENT = 0.001 
 EVAL_WINDOW_SIZE_MINUTES = 3 * 60 
@@ -42,7 +42,7 @@ if ATTENTION_OUTPUT_DIM % ATTENTION_HEADS != 0:
 
 # --- Fitness Scaler & Threshold (GLOBAL) ---
 FITNESS_SCALER = INITIAL_STARTING_CAPITAL * 10.0 
-FITNESS_THRESHOLD_CONFIG = 15000.0 
+FITNESS_THRESHOLD_CONFIG = 500000.0 
 
 _COLUMN_NAMES_RESOLVED_FOR_CURRENT_FETCH = False
 COL_OPEN, COL_HIGH, COL_LOW, COL_CLOSE, COL_VOLUME = 'Open', 'High', 'Low', 'Close', 'Volume'
@@ -513,13 +513,13 @@ def normalize_data(train_df, val_df):
     return train_scaled_df, val_scaled_df, scaler
 
 
-# --- FITNESS FUNCTION (New Approach v5 - Focus on Active Profitable Trading and Record Breaking) ---
+# --- FITNESS FUNCTION (New Approach v9 - "Alpha-Driven Profitability & Mandatory Active Success") ---
 def eval_genomes(genomes, config):
     global train_data_scaled_np_global, train_data_raw_prices_global, \
            current_eval_window_start_index, max_portfolio_ever_achieved_in_training, \
            num_input_features_from_data_global, FITNESS_SCALER 
 
-    # --- Data preparation for the current evaluation window (same as before) ---
+    # --- Data preparation ---
     full_train_len = len(train_data_scaled_np_global)
     window_size_for_eval = EVAL_WINDOW_SIZE_MINUTES
     min_eval_window_size = ATTENTION_SEQUENCE_LENGTH + 30 
@@ -541,46 +541,56 @@ def eval_genomes(genomes, config):
     current_eval_scaled_features_window = train_data_scaled_np_global[start_idx_global_for_this_gen_eval : end_idx_global_for_this_gen_eval]
     current_eval_raw_prices_df_window = train_data_raw_prices_global.iloc[start_idx_global_for_this_gen_eval : end_idx_global_for_this_gen_eval]
 
-    # --- Fitness Parameters v5 (Defined INSIDE eval_genomes) ---
-    BASE_OPERATING_COST_PER_WINDOW = FITNESS_SCALER * 0.15 
-    RUIN_THRESHOLD = 0.20 
-    RUIN_PENALTY = FITNESS_SCALER * 300.0 
-    SEVERE_LOSS_THRESHOLD = 0.50 
-    SEVERE_LOSS_PENALTY_FACTOR = 8.0 
-    ALPHA_POSITIVE_SCALER = FITNESS_SCALER * 3.5  
-    ALPHA_NEGATIVE_PENALTY_SCALER = FITNESS_SCALER * 3.0 
-    PROFIT_FACTOR_SCALER = FITNESS_SCALER * 0.4 
-    PROFIT_FACTOR_TARGET = 1.25 
-    MAX_PROFIT_FACTOR_REWARD_CAP = FITNESS_SCALER * 1.25 
-    MIN_PROFIT_FACTOR_PENALTY_SCALER = 1.25 
-    REALIZED_PNL_POSITIVE_SCALER = FITNESS_SCALER * 1.0 
-    REALIZED_PNL_NEGATIVE_SCALER = FITNESS_SCALER * 1.75 
+    # --- Fitness Parameters v9 (ALL DEFINED HERE - THOROUGHLY CHECKED) ---
+    MANDATORY_IMPROVEMENT_PENALTY = FITNESS_SCALER * 1.0  # Increased "cost of existing"
     
+    RUIN_THRESHOLD = 0.10 
+    RUIN_PENALTY = FITNESS_SCALER * 1000.0 
+    
+    ALPHA_SCALER = FITNESS_SCALER * 6.0  # Alpha is king
+    
+    PROFIT_SCALER_BONUS = FITNESS_SCALER * 0.75 # Bonus for raw profit_ratio IF alpha is okay
+    EXCEPTIONAL_PROFIT_RATIO_WINDOW = 0.075 # 7.5% in window is exceptional
+    EXCEPTIONAL_PROFIT_POWER = 1.75 # Exponential bonus
+    EXCEPTIONAL_PROFIT_BONUS_SCALER = FITNESS_SCALER * 5.0 # Multiplier for exceptional profit bonus
+
+    PROFIT_FACTOR_SCALER = FITNESS_SCALER * 0.6 
+    PROFIT_FACTOR_TARGET = 1.35 
+    MAX_PROFIT_FACTOR_REWARD_CAP = FITNESS_SCALER * 1.75 
+    POOR_PROFIT_FACTOR_PENALTY_SCALER = 1.75 
+
+    REALIZED_PNL_SCALER = FITNESS_SCALER * 1.5 
+
     window_hours = actual_window_len / 60.0
-    MIN_TRADES_IN_WINDOW_FOR_ACTIVITY = max(2, int(window_hours * 0.75)) # THIS WAS THE MISSING ONE
+    # Stricter minimum trades, e.g. at least 1 trade per 30-45 mins of window, or minimum 3.
+    MIN_ACTIVE_TRADES = max(3, int(window_hours * 1.5)) 
+    MIN_ALPHA_FOR_PASSIVITY = 0.002 # If alpha < 0.2%, passivity is penalized more heavily
+    VOLATILITY_THRESHOLD_FOR_INACTION = 0.0020 
+    INACTION_PROFIT_THRESHOLD = 0.0005 # If profit less than this and inactive, penalize
+    PROFITABLE_BH_THRESHOLD = 0.001 
+    MISSED_OPPORTUNITY_PENALTY = FITNESS_SCALER * 5.0 # Increased
+    FAILURE_TO_EXPLORE_PENALTY = FITNESS_SCALER * 2.5 # Increased
     
-    MIN_TRADES_PENALTY_BASE = FITNESS_SCALER * 0.75 
-    VOLATILITY_THRESHOLD_FOR_INACTION_PENALTY = 0.003 
-    INACTION_PROFIT_THRESHOLD = 0.001 
-    INACTION_PENALTY_SCALER = FITNESS_SCALER * 1.0 
+    ACTIVE_LOSS_THRESHOLD = -0.001 # If actively trading results in >0.1% loss
+    ACTIVE_LOSS_PENALTY_SCALER = FITNESS_SCALER * 3.0 # Increased
+
     MAX_FEE_TO_REALIZED_PROFIT_RATIO = 0.20 
-    FEE_EXCESS_PENALTY_SCALER = FITNESS_SCALER * 2.5
-    INTRA_WINDOW_GROWTH_SCALER = FITNESS_SCALER * 0.5
-    EXCEPTIONAL_PROFIT_RATIO_THRESHOLD = 0.10 
-    EXCEPTIONAL_PROFIT_BONUS_MULTIPLIER = 2.0 
-    GLOBAL_RECORD_BREAK_MASSIVE_BONUS = FITNESS_SCALER * 25.0
-    GLOBAL_RECORD_BREAK_PROPORTIONAL_BONUS = FITNESS_SCALER * 10.0 
-    MAX_ABS_FITNESS_CAP = FITNESS_SCALER * 100.0 # Increased cap for record breaking potential
+    FEE_EXCESS_PENALTY_SCALER = FITNESS_SCALER * 3.0
+
+    GLOBAL_RECORD_BREAK_MASSIVE_BONUS = FITNESS_SCALER * 50.0 # Massive flat bonus
+    GLOBAL_RECORD_BREAK_PROPORTIONAL_BONUS = FITNESS_SCALER * 20.0 # Increased proportional
+    
+    MAX_ABS_FITNESS_CAP = FITNESS_SCALER * 150.0 
+    VERY_LOW_FITNESS_FOR_CULLING = - (FITNESS_SCALER * 10000.0) 
+    # End of Fitness Parameter Definitions
 
 
     for genome_id, genome in genomes:
         net = neat.nn.FeedForwardNetwork.create(genome, config)
         trader = Trader(INITIAL_STARTING_CAPITAL, INITIAL_STARTING_HOLDINGS, trading_fee_percent=TRADING_FEE_PERCENT)
-        genome.fitness = 0.0 
         
         gross_profit_from_trades = 0
         gross_loss_from_trades = 0
-        window_start_portfolio_value = INITIAL_STARTING_CAPITAL 
         window_peak_portfolio_value = INITIAL_STARTING_CAPITAL 
         
         for i_window in range(len(current_eval_scaled_features_window)): 
@@ -625,6 +635,7 @@ def eval_genomes(genomes, config):
         final_portfolio = trader.get_portfolio_value(current_eval_raw_prices_df_window.iloc[-1][COL_CLOSE])
         total_trades = len(trader.trade_log) 
         profit_ratio_overall = (final_portfolio - INITIAL_STARTING_CAPITAL) / INITIAL_STARTING_CAPITAL if INITIAL_STARTING_CAPITAL > 1e-6 else 0.0
+        realized_pnl_window_ratio = trader.realized_gains_this_evaluation / INITIAL_STARTING_CAPITAL if INITIAL_STARTING_CAPITAL > 1e-6 else 0.0
         
         buy_hold_profit_ratio = 0.0 
         if len(current_eval_raw_prices_df_window) > 1:
@@ -637,7 +648,8 @@ def eval_genomes(genomes, config):
                 bh_final_value_net = bh_final_value_gross * (1 - TRADING_FEE_PERCENT)
                 buy_hold_profit_ratio = (bh_final_value_net - bh_start_capital) / bh_start_capital if bh_start_capital > 1e-6 else 0.0
 
-        fitness_score = -BASE_OPERATING_COST_PER_WINDOW
+        # --- Fitness Calculation v9 ---
+        fitness_score = -MANDATORY_IMPROVEMENT_PENALTY 
 
         if final_portfolio < INITIAL_STARTING_CAPITAL * RUIN_THRESHOLD:
             fitness_score -= RUIN_PENALTY 
@@ -646,76 +658,88 @@ def eval_genomes(genomes, config):
             fitness_score -= RUIN_PENALTY * 0.75
             genome.fitness = fitness_score; continue
         
-        if final_portfolio < INITIAL_STARTING_CAPITAL * SEVERE_LOSS_THRESHOLD:
-             fitness_score -= (1 - (final_portfolio / (INITIAL_STARTING_CAPITAL + 1e-9) )) * FITNESS_SCALER * SEVERE_LOSS_PENALTY_FACTOR
+        # Core Fitness Driver: True Alpha
+        true_alpha_profit_ratio = profit_ratio_overall - buy_hold_profit_ratio
+        fitness_score += true_alpha_profit_ratio * ALPHA_SCALER 
 
-        base_profit_fitness = profit_ratio_overall * FITNESS_SCALER
-        if profit_ratio_overall > EXCEPTIONAL_PROFIT_RATIO_THRESHOLD:
-            base_profit_fitness *= EXCEPTIONAL_PROFIT_BONUS_MULTIPLIER 
-        fitness_score += base_profit_fitness
+        # Additive bonus for absolute profit, especially if exceptional
+        if true_alpha_profit_ratio > -0.01 or profit_ratio_overall > EXCEPTIONAL_PROFIT_RATIO_WINDOW * 0.5: 
+            profit_bonus_component = profit_ratio_overall * PROFIT_BASE_SCALER
+            if profit_ratio_overall > EXCEPTIONAL_PROFIT_RATIO_WINDOW:
+                excess_factor = profit_ratio_overall / EXCEPTIONAL_PROFIT_RATIO_WINDOW if EXCEPTIONAL_PROFIT_RATIO_WINDOW > 0 else 1
+                bonus_calc = (min(excess_factor, 4.0) ** EXCEPTIONAL_PROFIT_POWER) * EXCEPTIONAL_PROFIT_BONUS_SCALER
+                profit_bonus_component += bonus_calc
+            fitness_score += profit_bonus_component
+            
+        # Trade Quality Modifiers (Applied based on positive current score from alpha & profit)
+        # This section calculates a modifier; it does not add/subtract directly yet
+        quality_mod_factor = 1.0 
+        if (fitness_score + MANDATORY_IMPROVEMENT_PENALTY) > FITNESS_SCALER * 0.05: # Only if base score is positive
+            if total_trades >= 2:
+                pf_val = gross_profit_from_trades / (gross_loss_from_trades + 1e-9)
+                pf_val = min(pf_val, 30.0) 
+                if pf_val > PROFIT_FACTOR_TARGET:
+                    quality_mod_factor += min(((pf_val - PROFIT_FACTOR_TARGET)/PROFIT_FACTOR_TARGET) * 0.5, 0.5) # Max +50% from PF
+                elif pf_val < 1.0 and gross_loss_from_trades > 1e-6:
+                    quality_mod_factor -= min((1.0-pf_val) * 0.75, 0.75) # Max -75% from PF
+            
+            if realized_pnl_window_ratio > 0.0005: 
+                 quality_mod_factor += min((realized_pnl_window_ratio / (abs(profit_ratio_overall) + 0.001 if profit_ratio_overall !=0 else 0.001)) * 0.3, 0.3) # Max +30%
+            elif realized_pnl_window_ratio < -0.0005: 
+                 quality_mod_factor -= min((abs(realized_pnl_window_ratio) / (abs(profit_ratio_overall) + 0.001 if profit_ratio_overall !=0 else 0.001)) * 0.45, 0.45) # Max -45%
+            
+            quality_mod_factor = max(0.1, min(quality_mod_factor, 2.0)) # Clamp modifier: 0.1x to 2.0x
+            fitness_score *= quality_mod_factor # Apply quality modifier
 
-        alpha = profit_ratio_overall - buy_hold_profit_ratio
-        if alpha > 0.0005: 
-            fitness_score += alpha * ALPHA_POSITIVE_SCALER
-        elif alpha < -0.0005: 
-            fitness_score += alpha * ALPHA_NEGATIVE_PENALTY_SCALER 
+        # --- "Hard Cull" Criteria Application ---
+        cull_genome = False
+        window_price_std_dev = current_eval_raw_prices_df_window[COL_CLOSE].std() / (current_eval_raw_prices_df_window[COL_CLOSE].mean() + 1e-9)
+        market_moved_meaningfully = window_price_std_dev > VOLATILITY_THRESHOLD_FOR_INACTION
 
-        if total_trades >= 2 : 
-            profit_factor_val = gross_profit_from_trades / (gross_loss_from_trades + 1e-9) 
-            profit_factor_val = min(profit_factor_val, 25.0) 
-            if profit_factor_val > PROFIT_FACTOR_TARGET:
-                reward = min((profit_factor_val - PROFIT_FACTOR_TARGET) * PROFIT_FACTOR_SCALER, MAX_PROFIT_FACTOR_REWARD_CAP)
-                fitness_score += reward
-            elif profit_factor_val < 1.0 and gross_loss_from_trades > 1e-6: 
-                penalty = (1.0 - profit_factor_val) * PROFIT_FACTOR_SCALER * MIN_PROFIT_FACTOR_PENALTY_SCALER
-                fitness_score -= penalty
+        # CULL 1: Unproductive Inaction
+        # Must make MIN_ACTIVE_TRADES unless it's a justified exceptional hold (high alpha by holding)
+        is_justified_exception_hold = (true_alpha_profit_ratio > 0.02 and total_trades < MIN_ACTIVE_TRADES // 2) or \
+                                      (buy_hold_profit_ratio > B_AND_H_EXCEPTIONAL_THRESHOLD and total_trades == 0 and abs(true_alpha_profit_ratio) < 0.002)
+
+        if not is_justified_exception_hold and total_trades < MIN_ACTIVE_TRADES :
+            if market_moved_meaningfully and profit_ratio_overall < INACTION_PROFIT_THRESHOLD:
+                 # fitness_score -= FAILURE_TO_EXPLORE_PENALTY # Already heavily penalized by MANDATORY_IMPROVEMENT_PENALTY
+                 cull_genome = True # If didn't trade enough, market moved, and no profit -> cull
+            elif buy_hold_profit_ratio > PROFITABLE_BH_THRESHOLD and true_alpha_profit_ratio < 0: # Missed B&H opportunity
+                 # fitness_score -= MISSED_OPPORTUNITY_PENALTY
+                 cull_genome = True
         
-        realized_pnl_window_ratio = trader.realized_gains_this_evaluation / INITIAL_STARTING_CAPITAL if INITIAL_STARTING_CAPITAL > 1e-6 else 0.0
-        if realized_pnl_window_ratio > 0: 
-            fitness_score += realized_pnl_window_ratio * REALIZED_PNL_POSITIVE_SCALER
-        elif realized_pnl_window_ratio < 0: 
-             fitness_score += realized_pnl_window_ratio * REALIZED_PNL_NEGATIVE_SCALER 
-
-        window_price_range_current = current_eval_raw_prices_df_window[COL_CLOSE].max() - current_eval_raw_prices_df_window[COL_CLOSE].min()
-        window_volatility_metric_current = window_price_range_current / (current_eval_raw_prices_df_window[COL_CLOSE].mean() + 1e-9)
-        dynamic_inaction_penalty = MIN_TRADES_PENALTY_BASE * (1 + min(window_volatility_metric_current * 10, 2.0)) 
-
-        if total_trades == 0 :
-            if window_volatility_metric_current > VOLATILITY_THRESHOLD_FOR_INACTION_PENALTY: 
-                fitness_score -= dynamic_inaction_penalty 
-        elif total_trades < MIN_TRADES_IN_WINDOW_FOR_ACTIVITY and profit_ratio_overall < INACTION_PROFIT_THRESHOLD: 
-             if window_volatility_metric_current > VOLATILITY_THRESHOLD_FOR_INACTION_PENALTY * 0.5 : 
-                fitness_score -= dynamic_inaction_penalty * 0.5 * (1 - total_trades/MIN_TRADES_IN_WINDOW_FOR_ACTIVITY if MIN_TRADES_IN_WINDOW_FOR_ACTIVITY > 0 else 1)
-
-
-        if total_trades > 0 and trader.realized_gains_this_evaluation > 1e-6 : 
-            fee_to_realized_profit_ratio = trader.total_fees_paid / (trader.realized_gains_this_evaluation + 1e-9)
-            if fee_to_realized_profit_ratio > MAX_FEE_TO_REALIZED_PROFIT_RATIO:
-                fitness_score -= (fee_to_realized_profit_ratio - MAX_FEE_TO_REALIZED_PROFIT_RATIO) * FEE_EXCESS_PENALTY_SCALER
-        elif total_trades > (MIN_TRADES_IN_WINDOW_FOR_ACTIVITY * 2.5) and profit_ratio_overall < 0.001 : 
-            fitness_score -= FITNESS_SCALER * 0.3 
-
-        intra_window_growth_ratio = (window_peak_portfolio_value - window_start_portfolio_value) / (window_start_portfolio_value  + 1e-9)
-        if intra_window_growth_ratio > 0.001: 
-            fitness_score += intra_window_growth_ratio * INTRA_WINDOW_GROWTH_SCALER
+        # CULL 2: Catastrophic Active Trading
+        if not cull_genome and total_trades >= MIN_ACTIVE_TRADES and profit_ratio_overall < CATASTROPHIC_ACTIVE_LOSS:
+            cull_genome = True
         
-        # Ensure max_portfolio_ever_achieved_in_training is positive before using in division
-        if max_portfolio_ever_achieved_in_training <= 0: # Should not happen if initialized with capital
-            current_max_portfolio_for_ratio = INITIAL_STARTING_CAPITAL 
-        else:
-            current_max_portfolio_for_ratio = max_portfolio_ever_achieved_in_training
+        # CULL 3: Extreme Inefficient Churn
+        if not cull_genome and total_trades > EXCESSIVE_CHURN_THRESHOLD_CULL and \
+           profit_ratio_overall < MODEST_PROFIT_FOR_HIGH_TRADES:
+            if realized_pnl_window_ratio <= 1e-5 or \
+               (trader.total_fees_paid / (abs(realized_pnl_window_ratio * INITIAL_STARTING_CAPITAL) + 1e-9)) > MAX_FEE_TO_REALIZED_PROFIT_RATIO * 1.5: 
+                cull_genome = True
+        
+        if cull_genome:
+            genome.fitness = VERY_LOW_FITNESS_FOR_CULLING
+            continue 
+        
+        # Global Record Breaking (Only for non-culled survivors)
+        if window_peak_portfolio_value > max_portfolio_ever_achieved_in_training and profit_ratio_overall > 0.03: # Window must be >3% profitable
+             current_max_pf_for_ratio = max(INITIAL_STARTING_CAPITAL, max_portfolio_ever_achieved_in_training)
+             improvement_ratio_over_record = (window_peak_portfolio_value - max_portfolio_ever_achieved_in_training) / current_max_pf_for_ratio
+             record_break_bonus_actual = GLOBAL_RECORD_BREAK_MASSIVE_BONUS + (improvement_ratio_over_record * GLOBAL_RECORD_BREAK_PROPORTIONAL_BONUS)
+             fitness_score += record_break_bonus_actual
+             # print(f"DEBUG: Genome {genome_id} BROKE GLOBAL RECORD! Peak: {window_peak_portfolio_value:.2f}, Bonus: {record_break_bonus_actual:.2f}, Current Fitness: {fitness_score:.2f}")
 
-        if window_peak_portfolio_value > max_portfolio_ever_achieved_in_training and profit_ratio_overall > 0.01: 
-             improvement_ratio_over_record = (window_peak_portfolio_value - max_portfolio_ever_achieved_in_training) / current_max_portfolio_for_ratio
-             fitness_score += GLOBAL_RECORD_BREAK_BASE_BONUS 
-             fitness_score += improvement_ratio_over_record * GLOBAL_RECORD_BREAK_PROPORTIONAL_BONUS
 
         if abs(fitness_score) > MAX_ABS_FITNESS_CAP:
             fitness_score = np.sign(fitness_score) * MAX_ABS_FITNESS_CAP
             
         genome.fitness = fitness_score
         if np.isnan(genome.fitness) or np.isinf(genome.fitness): 
-            genome.fitness = - (FITNESS_SCALER * 2000) 
+            genome.fitness = VERY_LOW_FITNESS_FOR_CULLING 
+
 
 # --- run_simulation_and_plot (Unchanged from previous correct version) ---
 # ... (Insert the full run_simulation_and_plot function here) ...
