@@ -94,6 +94,7 @@ def plot_generational_performance(generations, metrics_history_dict, title="Perf
         if len(values) < len(generations):
             values_padded = values + [np.nan] * (len(generations) - len(values))
         elif len(values) > len(generations): # Should not happen if logic is correct
+            print(f"Warning: Metric '{metric_name}' has more values ({len(values)}) than generations ({len(generations)}). Truncating.")
             values_padded = values[:len(generations)]
         else:
             values_padded = values

@@ -17,20 +17,20 @@ class SharedSelfAttention(nn.Module):
                 f"Attention dim ({self.attention_dim}) must be divisible by "
                 f"the number of heads ({self.attention_heads})."
             )
-        
+
         self.head_dim = self.attention_dim // self.attention_heads
 
         self.query_proj = nn.Linear(input_dim, self.attention_dim)
         self.key_proj = nn.Linear(input_dim, self.attention_dim)
         self.value_proj = nn.Linear(input_dim, self.attention_dim)
-        
+
         self.output_proj = nn.Linear(self.attention_dim, self.attention_dim)
         self.dropout = nn.Dropout(dropout_rate)
 
     def forward(self, sequence_features, mask=None):
         # sequence_features: (batch_size, seq_len, input_dim)
         if sequence_features.ndim == 2: # (seq_len, input_dim)
-            sequence_features = sequence_features.unsqueeze(0) 
+            sequence_features = sequence_features.unsqueeze(0)
 
         batch_size, seq_len, _ = sequence_features.shape
 
@@ -45,6 +45,7 @@ class SharedSelfAttention(nn.Module):
         energy = torch.matmul(Q, K.permute(0, 1, 3, 2)) / math.sqrt(self.head_dim)
 
         if mask is not None: # mask should be (batch_size, 1, 1, seq_len) for broadcasting
+                             # where mask elements are 0 for pad, 1 for non-pad
             energy = energy.masked_fill(mask == 0, -1e10 if energy.dtype == torch.float32 else -1e4)
 
 
@@ -56,13 +57,13 @@ class SharedSelfAttention(nn.Module):
         weighted_values = weighted_values.view(batch_size, seq_len, self.attention_dim)
 
         output = self.output_proj(weighted_values)
-        
+
         # Use the output corresponding to the *last element* of the sequence as the context
         # if we want attention to be causal and focus on summarizing up to the current point.
         # Or, average over the sequence length to get one context vector.
         # Let's average for a general summary.
-        context_vector = output.mean(dim=1) 
-        
+        context_vector = output.mean(dim=1)
+
         if batch_size == 1:
             return context_vector.squeeze(0)
         return context_vector
@@ -86,30 +87,33 @@ def get_attention_output(sequence_features_np, current_seq_len, target_seq_len, 
     if shared_attention_layer is None:
         raise RuntimeError("Shared attention layer not initialized.")
 
-    # Handle padding for sequences shorter than target_seq_len (e.g., at the start of data)
     padded_sequence_np = np.zeros((target_seq_len, feature_dim), dtype=np.float32)
+    valid_elements_count = 0 # How many actual data points are in padded_sequence_np
+
     if current_seq_len > 0:
         if current_seq_len <= target_seq_len:
             padded_sequence_np[-current_seq_len:] = sequence_features_np[-current_seq_len:]
+            valid_elements_count = current_seq_len
         else: # current_seq_len > target_seq_len, take the last target_seq_len elements
             padded_sequence_np = sequence_features_np[-target_seq_len:]
-    
-    # Create a mask for padded elements if needed by attention mechanism
-    # (1 for real data, 0 for padding). Mask shape (1, 1, target_seq_len)
-    # For `output.mean(dim=1)` as context, explicit masking of softmax input might be less critical
-    # if padding is zeros, but good practice.
-    # For simplicity in this version, we'll rely on zero-padding influencing softmax less.
-    # A more robust mask would be:
-    # attention_mask = torch.zeros(1, 1, target_seq_len, device=attention_device)
-    # attention_mask[:, :, -current_seq_len:] = 1 # Mark valid parts of the sequence
+            valid_elements_count = target_seq_len
+
+    # Create a mask for padded elements. Mask shape (1, 1, 1, target_seq_len)
+    # Mask has 1 for real data, 0 for padding.
+    attention_mask_tensor = None
+    if valid_elements_count < target_seq_len and valid_elements_count > 0: # Only create mask if actual padding happened
+        attention_mask_np = np.zeros((1, 1, 1, target_seq_len), dtype=np.float32)
+        attention_mask_np[:, :, :, -valid_elements_count:] = 1.0 # Mark valid parts of the sequence
+        attention_mask_tensor = torch.tensor(attention_mask_np, dtype=torch.float32).to(attention_device)
+
 
     sequence_tensor = torch.tensor(padded_sequence_np, dtype=torch.float32).to(attention_device)
     if sequence_tensor.ndim == 2:
-        sequence_tensor = sequence_tensor.unsqueeze(0)
-    
+        sequence_tensor = sequence_tensor.unsqueeze(0) # Add batch dimension
+
     with torch.no_grad():
-        attention_context_vector = shared_attention_layer(sequence_tensor) #, mask=attention_mask if current_seq_len < target_seq_len else None)
-    
+        attention_context_vector = shared_attention_layer(sequence_tensor, mask=attention_mask_tensor)
+
     return attention_context_vector.cpu().numpy()
 
 # Placeholder for evolving attention parameters (Q,K,V) - NOT USED IN THIS VERSION
