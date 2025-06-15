@@ -1,6 +1,6 @@
 [NEAT]
 fitness_criterion     = max
-fitness_threshold     = 500000  
+fitness_threshold     = 2500
 pop_size              = 200     
 reset_on_extinction   = True
 
@@ -29,7 +29,7 @@ compatibility_disjoint_coefficient = 1.0
 compatibility_weight_coefficient   = 0.5
 
 # connection add/remove rates
-conn_add_prob           = 0.6    
+conn_add_prob           = 0.7
 conn_delete_prob        = 0.4    
 
 # connection enable options
@@ -40,12 +40,12 @@ feed_forward            = True
 initial_connection      = full_nodirect 
 
 # node add/remove rates
-node_add_prob           = 0.3   
+node_add_prob           = 0.4
 node_delete_prob        = 0.15  
 
 # network parameters
 num_hidden              = 1     
-num_inputs              = 72
+num_inputs              = 73
 num_outputs             = 2
 
 # node response options
@@ -67,11 +67,11 @@ weight_mutate_rate      = 0.9
 weight_replace_rate     = 0.15  
 
 [DefaultSpeciesSet]
-compatibility_threshold = 3.5   
+compatibility_threshold = 3.8
 
 [DefaultStagnation]
 species_fitness_func = max
-max_stagnation       = 15      
+max_stagnation       = 20
 species_elitism      = 2       
 
 [DefaultReproduction]
