@@ -1,4 +1,4 @@
-# functionalities.py, attention.py, and other imports remain the same...
+# main.py
 import yfinance as yf
 import pandas as pd
 import numpy as np
@@ -25,13 +25,13 @@ INITIAL_STARTING_CAPITAL = 200.0
 INITIAL_STARTING_HOLDINGS = 0.0
 N_LAGS = 2
 CONFIG_FILE_PATH = "./config-feedforward-attention"
-N_GENERATIONS = 50 # Adjust as needed
-MAX_EXPECTED_CREDIT = INITIAL_STARTING_CAPITAL * 5
-MAX_EXPECTED_HOLDINGS_VALUE = INITIAL_STARTING_CAPITAL * 5
+N_GENERATIONS = 50 
+MAX_EXPECTED_CREDIT = INITIAL_STARTING_CAPITAL * 10
+MAX_EXPECTED_HOLDINGS_VALUE = INITIAL_STARTING_CAPITAL * 10
 PLOT_BEST_OF_GENERATION_EVERY = 10
 PLOT_WINDOW_PERFORMANCE = True
 TRADING_FEE_PERCENT = 0.001
-EVAL_WINDOW_SIZE_MINUTES = 3 * 60
+EVAL_WINDOW_SIZE_MINUTES = 4 * 60
 
 # --- Attention Mechanism Configuration ---
 ATTENTION_SEQUENCE_LENGTH = 15
@@ -43,10 +43,11 @@ if ATTENTION_OUTPUT_DIM % ATTENTION_HEADS != 0:
 _COLUMN_NAMES_RESOLVED_FOR_CURRENT_FETCH = False
 COL_OPEN, COL_HIGH, COL_LOW, COL_CLOSE, COL_VOLUME = 'Open', 'High', 'Low', 'Close', 'Volume'
 current_eval_window_start_index = 0
-max_final_profitable_portfolio_global_record = INITIAL_STARTING_CAPITAL # Based on window evaluation
-MEANINGFUL_PROFIT_FOR_RECORD_FACTOR = 1.01 # To qualify for breaking a record (e.g., 1% profit)
 
-best_record_breaker_details = { # Tracks best peak portfolio on FULL TRAIN SIM for reporting
+# --- GLOBAL RECORD TRACKING ---
+max_final_portfolio_record_global = INITIAL_STARTING_CAPITAL 
+
+best_record_breaker_details = {
     "genome_obj": None, "window_fitness": -float('inf'), "portfolio_achieved_on_full_train": -float('inf')
 }
 current_eval_window_raw_data_for_plotting = None
@@ -54,42 +55,36 @@ current_eval_window_raw_data_for_plotting = None
 train_data_scaled_np_global = None
 train_data_raw_prices_global = None
 num_input_features_from_data_global = 0
-FITNESS_THRESHOLD_CONFIG_FROM_FILE = 500.0 # Default, will be read from config.
+FITNESS_THRESHOLD_CONFIG_FROM_FILE = 10000.0
 
 
-# --- REVISED FITNESS CONSTANTS (ProfitDrivenEngine V3) ---
-# A. UNIVERSAL PENALTIES (Overrides)
-RUIN_PORTFOLIO_THRESHOLD_FACTOR = 0.10
+# --- FITNESS CONSTANTS (Uncompromising Profit Engine V6) ---
+# A. IMMEDIATE DISQUALIFICATIONS (DEATH PENALTIES)
 RUIN_DEATH_SCORE = -1000.0
-
-MINIMUM_TRADES_FOR_ACTIVITY = 5
+MINIMUM_TRADES_FOR_ACTIVITY = 4
 INACTIVITY_DEATH_SCORE = -900.0
-
+NO_SELLS_DEATH_SCORE = -800.0
 VERY_LOW_FITNESS_UNSALVAGEABLE = -1100.0
 
-# B. CORE LOGIC: Net Profit is King. Sharpe Ratio is a bonus for winners.
-# Scaler for the final net profit. This is the main component.
-NET_PROFIT_SCALER = 5.0
+# B. THE CORE PROFIT ENGINE
+# The base reward is now directly tied to the percentage return.
+PROFIT_SCALER = 500.0 
+# ** NEW **: Rewards compound, making high-percentage gains exponentially more valuable.
+PROFIT_COMPOUNDING_FACTOR = 1.5 
 
-# Scaler for the Sharpe Ratio. This acts as a MULTIPLIER for PROFITABLE strategies.
-# A profitable agent's fitness will be: (net_profit * SCALER) * (1 + sharpe_ratio * SHARPE_SCALER)
-SHARPE_RATIO_BONUS_SCALER = 0.5
+# C. RECORD-BREAKING
+# A massive bonus for achieving a new all-time high FINAL portfolio value.
+RECORD_BREAKER_BONUS = 5000.0
 
-# C. MODIFIERS & PENALTIES
-# Penalty for underperforming a simple Buy & Hold strategy.
-BH_UNDERPERFORM_PENALTY_SCALER = 150.0
-
-# Penalty for high drawdown. This is a direct subtraction from fitness.
-DRAWDOWN_PENALTY_SCALER = 300.0
-
-# Multiplier for Profit Factor (Gross Profit / Gross Loss). Rewards efficient gains.
-PROFIT_FACTOR_MULTIPLIER_CAP = 1.5
-
-# D. FINAL CLIPPING
-MAX_FITNESS_CAP = 10000.0 # High, but achievable with a good strategy
-MIN_FITNESS_CAP = RUIN_DEATH_SCORE - 1.0
-# --- END OF FITNESS CONSTANTS (ProfitDrivenEngine V3) ---
-
+# D. BEHAVIORAL SHAPING
+# Bonus for having a high ratio of profits to losses. Rewards clean trading.
+PROFIT_FACTOR_BONUS = 150.0
+# Penalty for ending with a large portion of value tied up in unrealized assets.
+# This forces the agent to learn to take profit.
+TERMINAL_HOLDING_PENALTY_FACTOR = 0.7 
+# Penalty for high drawdown from peak portfolio value.
+DRAWDOWN_PENALTY_FACTOR = 0.5
+# --- END OF FITNESS CONSTANTS ---
 
 class GenerationReporter(neat.reporting.BaseReporter):
     # This class is correct and does not need changes.
@@ -105,7 +100,7 @@ class GenerationReporter(neat.reporting.BaseReporter):
         self.generations_list = []
         self.metrics_history = {
             "Best Fitness (Window)": [],
-            "Max Final Profitable Portfolio Global Record ($)": [], # From window evals
+            "Max Final Portfolio Global Record ($)": [], # From window evals
             "Best Gen Genome's Portfolio ($) (Full Train Sim)": [],
             "Best Gen Genome's Net Profit ($) (Full Train Sim)": [],
             "Best Gen Genome's Credit ($) (Full Train Sim)": [],
@@ -125,12 +120,12 @@ class GenerationReporter(neat.reporting.BaseReporter):
         full_train_len = len(train_data_scaled_np_global)
         window_size_for_eval = EVAL_WINDOW_SIZE_MINUTES
 
-        min_eval_window_size_for_reporter = ATTENTION_SEQUENCE_LENGTH + 30 # Min data points for meaningful eval
+        min_eval_window_size_for_reporter = ATTENTION_SEQUENCE_LENGTH + 30
         if window_size_for_eval >= full_train_len or window_size_for_eval <= min_eval_window_size_for_reporter :
-            window_size_for_eval = max(min_eval_window_size_for_reporter + 5, full_train_len // 3) # Ensure reasonable default
+            window_size_for_eval = max(min_eval_window_size_for_reporter + 5, full_train_len // 3)
 
         if full_train_len > window_size_for_eval:
-            advance_step = max(1, int(window_size_for_eval * 0.75)) # Slide window by 75% of its size
+            advance_step = max(1, int(window_size_for_eval * 0.75))
             total_advanceable_range = max(0, full_train_len - window_size_for_eval)
 
             if total_advanceable_range > 0 :
@@ -138,7 +133,7 @@ class GenerationReporter(neat.reporting.BaseReporter):
             else:
                 current_eval_window_start_index = 0
         else:
-            current_eval_window_start_index = 0 # Not enough data to slide, use all of it
+            current_eval_window_start_index = 0
 
         current_eval_window_start_index = max(0, current_eval_window_start_index)
         current_eval_window_start_index = min(current_eval_window_start_index, max(0, full_train_len - window_size_for_eval))
@@ -146,7 +141,7 @@ class GenerationReporter(neat.reporting.BaseReporter):
         eval_win_start_idx = current_eval_window_start_index
         eval_win_end_idx = min(eval_win_start_idx + window_size_for_eval, full_train_len)
 
-        if eval_win_end_idx <= eval_win_start_idx or eval_win_start_idx >= len(self.train_data_raw_prices_global_ref): # Check if window is valid
+        if eval_win_end_idx <= eval_win_start_idx or eval_win_start_idx >= len(self.train_data_raw_prices_global_ref):
              current_eval_window_raw_data_for_plotting = pd.DataFrame()
         else:
             safe_eval_win_end_idx = min(eval_win_end_idx, len(self.train_data_raw_prices_global_ref))
@@ -161,7 +156,7 @@ class GenerationReporter(neat.reporting.BaseReporter):
 
 
     def _actual_end_of_generation_logic(self, config, population_genomes_dict, species_set_object):
-        global max_final_profitable_portfolio_global_record, best_record_breaker_details, \
+        global max_final_portfolio_record_global, best_record_breaker_details, \
                current_eval_window_raw_data_for_plotting, train_data_scaled_np_global, \
                num_input_features_from_data_global
 
@@ -179,7 +174,7 @@ class GenerationReporter(neat.reporting.BaseReporter):
         self.generations_list.append(self.generation_count)
 
         gen_metrics_values = {key: np.nan for key in self.metrics_history.keys()}
-        gen_metrics_values["Max Final Profitable Portfolio Global Record ($)"] = max_final_profitable_portfolio_global_record
+        gen_metrics_values["Max Final Portfolio Global Record ($)"] = max_final_portfolio_record_global
 
         if best_genome_this_gen_by_window_fitness:
             gen_metrics_values["Best Fitness (Window)"] = current_gen_max_window_fitness
@@ -329,7 +324,7 @@ class GenerationReporter(neat.reporting.BaseReporter):
         metrics_to_plot = {
             k: v for k, v in self.metrics_history.items()
             if "Best Fitness (Window)" in k or \
-               "Max Final Profitable Portfolio Global Record ($)" in k or \
+               "Max Final Portfolio Global Record ($)" in k or \
                "Net Profit ($) (Full Train Sim)" in k or \
                "Portfolio ($) (Full Train Sim)" in k or \
                "Projected Weekly Return (%) (Full Train Sim)" in k
@@ -340,20 +335,17 @@ class GenerationReporter(neat.reporting.BaseReporter):
 
             for k, v_list in metrics_to_plot.items():
                 if len(v_list) == 0: continue
-
                 if len(v_list) != max_len:
                      print(f"Plotting Warning: Metric '{k}' has length {len(v_list)}, but expected {max_len} generations. Padding/truncating for plot.")
-                
                 if len(v_list) < max_len:
                     v_list_padded = v_list + [np.nan] * (max_len - len(v_list))
                 else:
                     v_list_padded = v_list[:max_len]
-
                 if not all(np.isnan(val) if isinstance(val, float) else False for val in v_list_padded):
                     valid_metrics_history[k] = v_list_padded
 
             if valid_metrics_history:
-                 plot_generational_performance(self.generations_list, valid_metrics_history, title="Key Metrics Per Generation (ProfitDrivenEngine V3)")
+                 plot_generational_performance(self.generations_list, valid_metrics_history, title="Key Metrics Per Generation (Uncompromising Profit Engine V6)")
             else:
                  print("No valid generational metrics data to plot (all NaNs after alignment or selected metrics were empty).")
         else:
@@ -608,18 +600,17 @@ def normalize_data(train_df, val_df):
 def eval_genomes(genomes, config):
     # *** THIS IS THE MAIN CORRECTED FUNCTION ***
     global train_data_scaled_np_global, train_data_raw_prices_global, \
-           current_eval_window_start_index, num_input_features_from_data_global
+           current_eval_window_start_index, num_input_features_from_data_global, \
+           max_final_portfolio_record_global
 
     full_train_len = len(train_data_scaled_np_global)
     window_size_for_eval = EVAL_WINDOW_SIZE_MINUTES
     
-    min_required_data_points = ATTENTION_SEQUENCE_LENGTH + 30
+    min_required_data_points = ATTENTION_SEQUENCE_LENGTH + 50
     if window_size_for_eval >= full_train_len or window_size_for_eval < min_required_data_points:
         window_size_for_eval = max(min_required_data_points, full_train_len // 2)
         if full_train_len < min_required_data_points:
             for _, genome in genomes: genome.fitness = VERY_LOW_FITNESS_UNSALVAGEABLE
-            if full_train_len > 0:
-                 print(f"WARNING: Full training data ({full_train_len} points) is less than min required ({min_required_data_points}). Genomes get unsalvageable fitness.")
             return
 
     start_idx_global_for_this_gen_eval = current_eval_window_start_index
@@ -631,123 +622,111 @@ def eval_genomes(genomes, config):
 
     if actual_window_len < min_required_data_points:
         for _, genome in genomes: genome.fitness = VERY_LOW_FITNESS_UNSALVAGEABLE
-        print(f"WARNING: Current evaluation window ({actual_window_len} points) is too short. Genomes get unsalvageable fitness.")
         return
 
     current_eval_scaled_features_window_np = train_data_scaled_np_global[start_idx_global_for_this_gen_eval : end_idx_global_for_this_gen_eval]
     current_eval_raw_prices_df_window = train_data_raw_prices_global.iloc[start_idx_global_for_this_gen_eval : end_idx_global_for_this_gen_eval]
 
-    ruin_threshold_abs = INITIAL_STARTING_CAPITAL * RUIN_PORTFOLIO_THRESHOLD_FACTOR
-
     for genome_id, genome in genomes:
         net = neat.nn.FeedForwardNetwork.create(genome, config)
         trader = Trader(INITIAL_STARTING_CAPITAL, INITIAL_STARTING_HOLDINGS, trading_fee_percent=TRADING_FEE_PERCENT)
         
-        sim_loop_start_offset_in_window = 0
-        first_predictable_global_idx = ATTENTION_SEQUENCE_LENGTH - 1
-
-        if start_idx_global_for_this_gen_eval < first_predictable_global_idx:
-            sim_loop_start_offset_in_window = first_predictable_global_idx - start_idx_global_for_this_gen_eval
+        sim_loop_start_offset_in_window = ATTENTION_SEQUENCE_LENGTH - 1
         
-        if sim_loop_start_offset_in_window >= actual_window_len or \
-           (actual_window_len - sim_loop_start_offset_in_window) < (ATTENTION_SEQUENCE_LENGTH // 2 + 5):
-            trader.history.append({'portfolio_value': INITIAL_STARTING_CAPITAL})
-        else:
-            for i in range(sim_loop_start_offset_in_window):
-                trader.update_history(
-                    current_eval_raw_prices_df_window.index[i],
-                    current_eval_raw_prices_df_window.iloc[i][COL_CLOSE]
-                )
+        for i_window in range(sim_loop_start_offset_in_window, actual_window_len):
+            if not trader.is_alive: break
 
-            for i_window in range(sim_loop_start_offset_in_window, actual_window_len):
-                if not trader.is_alive: break
-
-                current_global_idx = start_idx_global_for_this_gen_eval + i_window
-                start_seq_global_idx = current_global_idx - ATTENTION_SEQUENCE_LENGTH + 1
-                sequence_for_attention_np = train_data_scaled_np_global[start_seq_global_idx : current_global_idx + 1]
-                
-                attention_context_np = get_attention_output(
-                    sequence_for_attention_np, current_seq_len=sequence_for_attention_np.shape[0],
-                    target_seq_len=ATTENTION_SEQUENCE_LENGTH, feature_dim=num_input_features_from_data_global)
-                
-                current_step_features_np_in_window = current_eval_scaled_features_window_np[i_window]
-                price = current_eval_raw_prices_df_window.iloc[i_window][COL_CLOSE]
-                ts = current_eval_raw_prices_df_window.index[i_window]
-                state = trader.get_state_for_nn(price, MAX_EXPECTED_CREDIT, MAX_EXPECTED_HOLDINGS_VALUE)
-                
-                nn_in = np.concatenate((current_step_features_np_in_window, attention_context_np.flatten(), state))
-                action_raw, amount_raw = net.activate(nn_in)
-                amount_to_use = np.clip(amount_raw, 0.01, 1.0)
-                
-                if action_raw > 0.55:
-                    trader.buy(amount_to_use * trader.credit, price, ts)
-                elif action_raw < 0.45:
-                    trader.sell(amount_to_use * trader.holdings_shares, price, ts)
-                
-                trader.update_history(ts, price)
+            current_global_idx = start_idx_global_for_this_gen_eval + i_window
+            start_seq_global_idx = current_global_idx - ATTENTION_SEQUENCE_LENGTH + 1
+            sequence_for_attention_np = train_data_scaled_np_global[start_seq_global_idx : current_global_idx + 1]
             
-        final_pf_this_window = trader.get_portfolio_value(current_eval_raw_prices_df_window.iloc[-1][COL_CLOSE])
-
-        # --- FITNESS CALCULATION (ProfitDrivenEngine V3) ---
-        total_trades_executed = len(trader.trade_log)
-
-        if final_pf_this_window < ruin_threshold_abs or not trader.is_alive:
+            attention_context_np = get_attention_output(
+                sequence_for_attention_np, current_seq_len=sequence_for_attention_np.shape[0],
+                target_seq_len=ATTENTION_SEQUENCE_LENGTH, feature_dim=num_input_features_from_data_global)
+            
+            current_step_features_np_in_window = current_eval_scaled_features_window_np[i_window]
+            price = current_eval_raw_prices_df_window.iloc[i_window][COL_CLOSE]
+            ts = current_eval_raw_prices_df_window.index[i_window]
+            state = trader.get_state_for_nn(price, MAX_EXPECTED_CREDIT, MAX_EXPECTED_HOLDINGS_VALUE)
+            
+            nn_in = np.concatenate((current_step_features_np_in_window, attention_context_np.flatten(), state))
+            action_raw, amount_raw = net.activate(nn_in)
+            amount_to_use = np.clip(amount_raw, 0.01, 1.0)
+            
+            if action_raw > 0.55:
+                trader.buy(amount_to_use * trader.credit, price, ts)
+            elif action_raw < 0.45:
+                trader.sell(amount_to_use * trader.holdings_shares, price, ts)
+            trader.update_history(ts, price)
+            
+        final_pf = trader.get_portfolio_value(current_eval_raw_prices_df_window.iloc[-1][COL_CLOSE])
+        net_profit = final_pf - INITIAL_STARTING_CAPITAL
+        
+        # --- FITNESS CALCULATION (Uncompromising Profit Engine V6) ---
+        
+        # 1. IMMEDIATE DISQUALIFICATIONS
+        if not trader.is_alive:
             genome.fitness = RUIN_DEATH_SCORE
             continue
-        if total_trades_executed < MINIMUM_TRADES_FOR_ACTIVITY:
+        
+        num_buys = sum(1 for t in trader.trade_log if t['type'] == 'buy')
+        num_sells = sum(1 for t in trader.trade_log if t['type'] == 'sell')
+
+        if (num_buys + num_sells) < MINIMUM_TRADES_FOR_ACTIVITY:
             genome.fitness = INACTIVITY_DEATH_SCORE
             continue
-
-        net_profit = final_pf_this_window - INITIAL_STARTING_CAPITAL
-        
-        # *** FIX ***: Implement the new profit-driven fitness logic to prevent Sharpe Ratio exploit.
-        base_fitness = net_profit * NET_PROFIT_SCALER
-
-        # Only apply Sharpe and Profit Factor bonuses if the agent is profitable
-        if net_profit > 0:
-            portfolio_values = [h['portfolio_value'] for h in trader.history]
-            sharpe_ratio = 0.0
-            if len(portfolio_values) > 1:
-                returns = pd.Series(portfolio_values).pct_change().dropna()
-                # Check for meaningful volatility to avoid division by zero
-                if len(returns) > 1 and returns.std() > 1e-9:
-                    sharpe_ratio = (returns.mean() / returns.std()) * np.sqrt(len(returns))
             
-            # The bonus is a multiplier: fitness *= (1 + sharpe_bonus)
-            sharpe_bonus = sharpe_ratio * SHARPE_RATIO_BONUS_SCALER
-            base_fitness *= (1 + max(0, sharpe_bonus)) # Ensure bonus isn't negative
+        if num_buys > 0 and num_sells == 0:
+            genome.fitness = NO_SELLS_DEATH_SCORE
+            continue
 
-            # Apply Profit Factor Multiplier
-            gross_profit = sum(t['profit'] for t in trader.trade_log if t['type'] == 'sell' and t.get('profit', 0) > 0)
-            gross_loss = sum(abs(t['profit']) for t in trader.trade_log if t['type'] == 'sell' and t.get('profit', 0) < 0)
-            if gross_profit > 0 and gross_loss > 1e-6:
-                profit_factor = gross_profit / gross_loss
-                pf_multiplier = 1 + min(np.log1p(profit_factor - 1), PROFIT_FACTOR_MULTIPLIER_CAP - 1)
-                base_fitness *= pf_multiplier
+        # 2. PROFIT-DRIVEN FITNESS CALCULATION
+        fitness = 0.0
+        profit_percentage = net_profit / INITIAL_STARTING_CAPITAL
         
-        # All penalties are applied universally after the base fitness is established
-        fitness = base_fitness
+        # Core reward: scaled and compounded profit percentage
+        if profit_percentage > 0:
+            fitness = (pow(1 + profit_percentage, PROFIT_COMPOUNDING_FACTOR) - 1) * PROFIT_SCALER
+        else:
+            # If not profitable, fitness is negative, proportional to the loss
+            genome.fitness = net_profit # Directly assign the loss as negative fitness
+            continue
 
+        # --- From here, we are only dealing with profitable genomes ---
+
+        # 3. RECORD-BREAKING REWARD
+        if final_pf > max_final_portfolio_record_global:
+            fitness += RECORD_BREAKER_BONUS
+            print(f"      *** NEW FINAL PROFIT RECORD: ${final_pf:.2f} by Genome {genome_id} (Profit: ${net_profit:.2f}) ***")
+            max_final_portfolio_record_global = final_pf
+
+        # 4. BEHAVIORAL BONUSES
+        gross_profit = sum(t['profit'] for t in trader.trade_log if t['type'] == 'sell' and t.get('profit', 0) > 0)
+        gross_loss = sum(abs(t['profit']) for t in trader.trade_log if t['type'] == 'sell' and t.get('profit', 0) < 0)
+        if gross_profit > 0 and gross_loss > 1e-6:
+            profit_factor = gross_profit / gross_loss
+            fitness += profit_factor * PROFIT_FACTOR_BONUS
+        
+        # 5. BEHAVIORAL PENALTIES
         # Drawdown Penalty
         max_pf_in_window = trader.max_portfolio_value_achieved
-        if max_pf_in_window > INITIAL_STARTING_CAPITAL:
-            drawdown_ratio = (max_pf_in_window - final_pf_this_window) / max_pf_in_window
-            fitness -= DRAWDOWN_PENALTY_SCALER * drawdown_ratio
+        if max_pf_in_window > final_pf:
+             drawdown_ratio = (max_pf_in_window - final_pf) / max_pf_in_window
+             # Penalty is proportional to the fitness itself
+             fitness *= (1 - (drawdown_ratio * DRAWDOWN_PENALTY_FACTOR))
 
-        # Buy-and-Hold Underperformance Penalty
-        start_price = current_eval_raw_prices_df_window.iloc[0][COL_CLOSE]
-        end_price = current_eval_raw_prices_df_window.iloc[-1][COL_CLOSE]
-        bh_return = (end_price - start_price) / start_price if start_price > 0 else 0
-        agent_return = net_profit / INITIAL_STARTING_CAPITAL
-        
-        if agent_return < bh_return:
-            fitness -= BH_UNDERPERFORM_PENALTY_SCALER * (bh_return - agent_return)
-        
-        # Finalization
-        if math.isnan(fitness) or math.isinf(fitness):
-            genome.fitness = VERY_LOW_FITNESS_UNSALVAGEABLE
+        # Terminal Holding Penalty
+        last_price = current_eval_raw_prices_df_window.iloc[-1][COL_CLOSE]
+        holdings_value = trader.holdings_shares * last_price
+        holdings_ratio = holdings_value / final_pf if final_pf > 0 else 1
+        fitness *= (1 - (holdings_ratio * TERMINAL_HOLDING_PENALTY_FACTOR))
+
+        # 6. FINAL ASSIGNMENT
+        # ** UNCOMPROMISING CHECK **: If fitness somehow became negative after penalties, it's a failure.
+        if fitness <= 0:
+            genome.fitness = net_profit # Punish it by its (small) initial profit
         else:
-            genome.fitness = np.clip(fitness, MIN_FITNESS_CAP, MAX_FITNESS_CAP)
+            genome.fitness = fitness
 
 def run_simulation_and_plot(genome, config, data_scaled_features_np_segment, data_raw_prices_df_segment, title_prefix, is_validation_run=False):
     # This function is correct and does not need changes.
@@ -873,7 +852,7 @@ def run_simulation_and_plot(genome, config, data_scaled_features_np_segment, dat
 def run_neat_trader(config_file):
     # This function is correct and does not need changes.
     global train_data_scaled_np_global, train_data_raw_prices_global, \
-           current_eval_window_start_index, max_final_profitable_portfolio_global_record, \
+           current_eval_window_start_index, max_final_portfolio_record_global, \
            best_record_breaker_details, current_eval_window_raw_data_for_plotting, \
            num_input_features_from_data_global, FITNESS_THRESHOLD_CONFIG_FROM_FILE
 
@@ -938,20 +917,16 @@ def run_neat_trader(config_file):
 
     if hasattr(cfg.genome_config, 'fitness_threshold'):
         FITNESS_THRESHOLD_CONFIG_FROM_FILE = cfg.genome_config.fitness_threshold
-        print(f"Fitness threshold from config: {FITNESS_THRESHOLD_CONFIG_FROM_FILE}. "
-              f"Note: With ProfitDrivenEngine V3, this represents a high profit-based score. "
-              "A value of 1000+ would indicate a very strong performer.")
-    else:
-        cfg.genome_config.fitness_threshold = FITNESS_THRESHOLD_CONFIG_FROM_FILE
-        print(f"Fitness threshold not found in config, set to default: {FITNESS_THRESHOLD_CONFIG_FROM_FILE}")
+    cfg.genome_config.fitness_threshold = FITNESS_THRESHOLD_CONFIG_FROM_FILE
+    print(f"Fitness threshold set to: {FITNESS_THRESHOLD_CONFIG_FROM_FILE}")
 
     if cfg.genome_config.num_inputs != total_nn_inputs:
         print(f"CRITICAL CONFIG ERROR: 'num_inputs' in NEAT config file is {cfg.genome_config.num_inputs}, "
               f"but script calculated {total_nn_inputs}. PLEASE UPDATE THE CONFIG FILE and restart.")
         return
 
+    max_final_portfolio_record_global = INITIAL_STARTING_CAPITAL
     current_eval_window_start_index = 0
-    max_final_profitable_portfolio_global_record = INITIAL_STARTING_CAPITAL
     best_record_breaker_details = { "genome_obj": None, "window_fitness": -float('inf'), "portfolio_achieved_on_full_train": INITIAL_STARTING_CAPITAL}
     current_eval_window_raw_data_for_plotting = None
 
@@ -978,7 +953,7 @@ def run_neat_trader(config_file):
     )
     pop.add_reporter(checkpointer)
 
-    print("\nStarting NEAT evolution with Attention & ProfitDrivenEngine V3 Fitness Function...");
+    print("\nStarting NEAT evolution with Uncompromising Profit Engine V6 Fitness Function...");
     winner = None
     try:
         winner = pop.run(eval_genomes, N_GENERATIONS)
@@ -1017,7 +992,7 @@ def run_neat_trader(config_file):
                     best_fitness_overall = stats_best.fitness
                     source_of_best = "StatisticsReporter's Best Genome Overall"
         except IndexError:
-            print("StatisticsReporter has no best genome recorded (likely due to early exit).")
+            pass
     
     if best_genome_overall is None and hasattr(pop, 'population') and pop.population:
         current_pop_genomes = list(pop.population.values())
@@ -1042,7 +1017,7 @@ def run_neat_trader(config_file):
 
     if best_genome_overall:
         output_dir = "neat_outputs"
-        winner_filename = f"winner_genome_attention_{TICKER.replace('/', '_')}_ProfitDrivenV3.pkl"
+        winner_filename = f"winner_genome_attention_{TICKER.replace('/', '_')}_UncompromisingV6.pkl"
         winner_path = os.path.join(output_dir, winner_filename)
         with open(winner_path, "wb") as f:
             pickle.dump(best_genome_overall, f)
@@ -1065,8 +1040,6 @@ def run_neat_trader(config_file):
                                     val_data_raw_prices_df,
                                     "Selected Best Genome on Validation Data",
                                     is_validation_run=True)
-        elif val_feature_df is not None and not val_feature_df.empty :
-            print("WARNING: Validation data was present but resulted in empty/short scaled features or raw prices for final eval. Skipping validation plot.")
         else:
             print("INFO: No validation data was available or it was too short for final evaluation.")
     else:
