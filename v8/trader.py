@@ -1,4 +1,3 @@
-# trader.py
 import numpy as np
 import pandas as pd
 
@@ -19,7 +18,8 @@ class Trader:
         self.max_portfolio_value_achieved = initial_credit
         self.total_fees_paid = 0.0
         
-        # NEW: Track steps since last trade to give the agent a sense of time/duration
+        # This tracks steps since the last trade to give the agent a sense of time/duration.
+        # It helps the NN learn to avoid holding a position for too long without profit.
         self.steps_since_last_trade = 0
 
 
@@ -37,6 +37,7 @@ class Trader:
         self.steps_since_last_trade = 0
 
     def _check_alive(self):
+        # A trader is considered "dead" or ruined if it has virtually no cash and no shares.
         min_meaningful_credit_abs = 0.01
         if self.credit < min_meaningful_credit_abs and self.holdings_shares < 1e-8:
             self.is_alive = False
@@ -136,7 +137,8 @@ class Trader:
         if portfolio_value > self.max_portfolio_value_achieved:
             self.max_portfolio_value_achieved = portfolio_value
 
-        if portfolio_value < (self.initial_credit * 0.001):
+        # Add another condition for being "dead" - catastrophic loss
+        if portfolio_value < (self.initial_credit * 0.1): # e.g., if value drops below 10% of start
              self.is_alive = False
 
     def get_portfolio_value(self, current_price):
@@ -155,12 +157,12 @@ class Trader:
             if avg_buy > 1e-6:
                 unrealized_pl_percentage = (current_price - avg_buy) / avg_buy
         
-        norm_unrealized_pl = np.clip(unrealized_pl_percentage, -0.75, 1.5)
+        # Clip to a reasonable range like [-1, 2] to prevent extreme values
+        norm_unrealized_pl = np.clip(unrealized_pl_percentage, -1.0, 2.0)
 
-        # NEW: Normalized steps since last trade.
-        # This helps the agent learn time-based strategies (e.g., "don't hold a losing position for too long").
-        # Max steps can be set to the window size or a fixed large number.
-        max_steps_in_position = 300 # e.g., 5 hours of 1-min data
+        # Normalize steps since last trade. This helps the agent learn time-based strategies.
+        # Max steps can be set to a value like the evaluation window size.
+        max_steps_in_position = 4 * 60 # e.g., 4 hours of 1-min data
         norm_steps_since_trade = min(self.steps_since_last_trade / max_steps_in_position, 1.0)
 
         return [ np.clip(norm_credit, 0, 1), 
