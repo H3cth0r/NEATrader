@@ -55,29 +55,34 @@ current_eval_window_raw_data_for_plotting = None
 train_data_scaled_np_global         = None
 train_data_raw_prices_global        = None
 num_input_features_from_data_global = 0
-FITNESS_THRESHOLD_CONFIG_FROM_FILE  = 500.0 # Adjusted to a more realistic profit-based goal
+FITNESS_THRESHOLD_CONFIG_FROM_FILE  = 10000.0 # High threshold, as fitness is now a composite score
 
 
-# --- FITNESS CONSTANTS (Profit-Is-King Engine V11 - Corrected) ---
-# This engine is designed to be extremely strict and reward only what matters: high-return, active trading.
+# --- FITNESS CONSTANTS (V13 - "Profit Quality Engine") ---
+# This engine prioritizes not just making a profit, but the *quality* and *efficiency* of that profit.
+
 # A. IMMEDIATE DISQUALIFICATIONS (The Great Filter)
-# Any genome failing these checks is heavily penalized and effectively culled.
-RUIN_DEATH_SCORE            = -1000.0          # For going bankrupt.
-MINIMUM_TRADES_FOR_ACTIVITY = 4     # Must perform at least this many trades.
-INACTIVITY_DEATH_SCORE      = -900.0     # For being passive and not trading enough.
-NO_SELLS_DEATH_SCORE        = -800.0       # For learning a simple "buy and hold" strategy.
+# These are fundamental and effective for culling clearly bad strategies.
+RUIN_DEATH_SCORE            = -1000.0 # For going bankrupt.
+MINIMUM_TRADES_FOR_ACTIVITY = 4       # Must perform at least this many trades (buys + sells).
+INACTIVITY_DEATH_SCORE      = -900.0  # For being passive.
+NO_SELLS_DEATH_SCORE        = -800.0  # For buy-and-hold.
 
-# B. CORE REWARD: PROFIT IS KING
-# The base fitness is the net profit. This provides the clearest, most direct signal.
+# B. PROFIT QUALITY METRICS (Applied ONLY to profitable genomes)
+# These metrics shape the strategy towards robustness and efficiency.
 
-# C. RECORD-BREAKING INCENTIVE
-# A large, flat bonus for achieving a new all-time high portfolio value. This pushes genomes to explore risky, high-reward strategies.
-RECORD_BREAKER_BONUS    = 500.0
+# 1. PROFIT-TO-PAIN RATIO (Reward for protecting gains)
+# This is a simplified Sortino Ratio logic. It rewards final profit relative to the maximum drawdown from the peak.
+# A higher ratio means the agent kept more of its potential gains.
+PROFIT_TO_PAIN_SCALER = 50.0
 
-# D. BEHAVIOR-SHAPING PENALTY
-# Penalizes strategies that achieve a high profit but then lose a significant portion of it before the end.
-# We want traders that not only make profit, but also protect it.
-DRAWDOWN_PENALTY_SCALER = 2.0 # Penalty = net_profit * drawdown_ratio * scaler
+# 2. EFFICIENCY BONUS (Reward for fewer, higher-impact trades)
+# This rewards the average profit made per trade, discouraging fee churning.
+PROFIT_PER_TRADE_SCALER = 2.0
+
+# 3. WIN RATE BONUS (Reward for consistency)
+# Encourages strategies that are correct more often. The reward is squared to heavily favor high win rates.
+WIN_RATE_SCALER = 100.0
 # --- END OF FITNESS CONSTANTS ---
 
 class GenerationReporter(neat.reporting.BaseReporter):
@@ -339,7 +344,7 @@ class GenerationReporter(neat.reporting.BaseReporter):
                     valid_metrics_history[k] = v_list_padded
 
             if valid_metrics_history:
-                 plot_generational_performance(self.generations_list, valid_metrics_history, title="Key Metrics Per Generation (Profit-Is-King Engine V11)")
+                 plot_generational_performance(self.generations_list, valid_metrics_history, title="Key Metrics Per Generation (Profit Quality Engine V13)")
             else:
                  print("No valid generational metrics data to plot (all NaNs after alignment or selected metrics were empty).")
         else:
@@ -593,36 +598,31 @@ def normalize_data(train_df, val_df):
 
 def eval_genomes(genomes, config):
     """
-    This is the core evaluation function for NEAT. It assesses each genome's performance.
-    The "Profit-Is-King Engine" is designed to be strict and effective:
-    1.  It simulates each genome over a sliding window of the training data.
-    2.  It applies a series of harsh disqualifications for undesirable behaviors.
-    3.  It calculates fitness based on pure profit, with bonuses and penalties to
-        shape behavior toward high-return, risk-aware strategies.
+    This is the core evaluation function for NEAT, implementing the strict
+    "Profit Quality Engine V13".
+
+    It evaluates genomes not just on raw profit, but on the *quality* and
+    *robustness* of their strategy, rewarding efficiency, consistency, and
+    risk management.
     """
     global train_data_scaled_np_global, train_data_raw_prices_global, \
-           current_eval_window_start_index, num_input_features_from_data_global, \
-           max_final_portfolio_record_global
+           current_eval_window_start_index, num_input_features_from_data_global
 
     full_train_len = len(train_data_scaled_np_global)
     window_size_for_eval = EVAL_WINDOW_SIZE_MINUTES
     
-    # Ensure the evaluation window is of a reasonable size
     min_required_data_points = ATTENTION_SEQUENCE_LENGTH + 50
     if window_size_for_eval >= full_train_len or window_size_for_eval < min_required_data_points:
         window_size_for_eval = max(min_required_data_points, full_train_len // 2)
         if full_train_len < min_required_data_points:
-            # Not enough data to even run a simulation, assign a terrible fitness to all
             for _, genome in genomes: genome.fitness = -1e9
             return
 
-    # Get the data for the current evaluation window
     start_idx_global_for_this_gen_eval = current_eval_window_start_index
     end_idx_global_for_this_gen_eval = min(start_idx_global_for_this_gen_eval + window_size_for_eval, full_train_len)
     actual_window_len = end_idx_global_for_this_gen_eval - start_idx_global_for_this_gen_eval
 
     if actual_window_len < min_required_data_points:
-        # Window is too short, cannot evaluate
         for _, genome in genomes: genome.fitness = -1e9
         return
 
@@ -635,7 +635,6 @@ def eval_genomes(genomes, config):
         
         sim_loop_start_offset_in_window = ATTENTION_SEQUENCE_LENGTH - 1
         
-        # --- Run simulation for the current genome ---
         for i_window in range(sim_loop_start_offset_in_window, actual_window_len):
             if not trader.is_alive: break
 
@@ -655,7 +654,6 @@ def eval_genomes(genomes, config):
             nn_in = np.concatenate((current_step_features_np_in_window, attention_context_np.flatten(), state))
             action_raw, amount_raw = net.activate(nn_in)
             
-            # Action logic: buy, sell, or hold (dead zone between 0.45 and 0.55)
             if action_raw > 0.55:
                 trader.buy(np.clip(amount_raw, 0.01, 1.0) * trader.credit, price, ts)
             elif action_raw < 0.45:
@@ -666,49 +664,50 @@ def eval_genomes(genomes, config):
         final_pf = trader.get_portfolio_value(current_eval_raw_prices_df_window.iloc[-1][COL_CLOSE])
         net_profit = final_pf - INITIAL_STARTING_CAPITAL
         
-        # --- FITNESS CALCULATION (Profit-Is-King Engine) ---
-        
-        # STAGE 1: IMMEDIATE DISQUALIFICATIONS (The Great Filter)
-        # These checks immediately cull undesirable strategies.
+        # --- STAGE 1: IMMEDIATE DISQUALIFICATIONS (The Great Filter) ---
         if not trader.is_alive:
             genome.fitness = RUIN_DEATH_SCORE
             continue
         
         num_buys = sum(1 for t in trader.trade_log if t['type'] == 'buy')
         num_sells = sum(1 for t in trader.trade_log if t['type'] == 'sell')
+        num_trades = num_buys + num_sells
 
-        if (num_buys + num_sells) < MINIMUM_TRADES_FOR_ACTIVITY:
-            genome.fitness = INACTIVITY_DEATH_SCORE # Punish for being passive
+        if num_trades < MINIMUM_TRADES_FOR_ACTIVITY:
+            genome.fitness = INACTIVITY_DEATH_SCORE
             continue
             
         if num_buys > 0 and num_sells == 0:
-            genome.fitness = NO_SELLS_DEATH_SCORE # Punish buy-and-hold
+            genome.fitness = NO_SELLS_DEATH_SCORE
             continue
 
-        # STAGE 2: CORE FITNESS CALCULATION
-        # The fitness is the net profit. Direct, simple, and cannot be gamed.
-        # A positive profit gives a positive fitness, a loss gives a negative one.
+        # --- STAGE 2: PROFIT-FIRST FITNESS CALCULATION ---
+        # Core principle: No profit, no reward. Fitness for losers is their loss amount.
+        if net_profit <= 0:
+            genome.fitness = net_profit
+            continue
+
+        # --- STAGE 3: PROFIT QUALITY SCORING (For Profitable Genomes) ---
+        # Start with the net profit as the base score.
         fitness = net_profit
 
-        # STAGE 3: BEHAVIOR SHAPING FOR PROFITABLE GENOMES
-        # Only apply bonuses/penalties to genomes that made a profit. This prevents
-        # rewarding losing strategies for "losing less" in a complex way.
-        if net_profit > 0:
-            # RECORD-BREAKING BONUS: A huge reward for pushing the boundary.
-            if final_pf > max_final_portfolio_record_global:
-                fitness += RECORD_BREAKER_BONUS
-                # print(f"      *** NEW PORTFOLIO RECORD: ${final_pf:.2f} by Genome {genome_id} (Profit: ${net_profit:.2f}) ***")
-                max_final_portfolio_record_global = final_pf
-        
-            # DRAWDOWN PENALTY: Penalize giving back profits.
-            # We want traders that not only find peaks but stay near them.
-            max_pf_in_window = trader.max_portfolio_value_achieved
-            if max_pf_in_window > final_pf:
-                drawdown = (max_pf_in_window - final_pf) / max_pf_in_window
-                # The penalty is scaled by the profit itself, making it relative and impactful.
-                penalty = net_profit * drawdown * DRAWDOWN_PENALTY_SCALER
-                fitness -= penalty
-        
+        # Metric 1: Profit-to-Pain Ratio (Rewards keeping gains)
+        max_pf_in_window = trader.max_portfolio_value_achieved
+        drawdown_dollars = max(1.0, max_pf_in_window - final_pf) # The "pain". Use max(1.0, ...) to avoid division by zero.
+        profit_to_pain_ratio = net_profit / drawdown_dollars
+        fitness += profit_to_pain_ratio * PROFIT_TO_PAIN_SCALER
+
+        # Metric 2: Efficiency Bonus (Rewards profit per trade)
+        if num_trades > 0:
+            profit_per_trade = net_profit / num_trades
+            fitness += profit_per_trade * PROFIT_PER_TRADE_SCALER
+
+        # Metric 3: Win Rate Bonus (Rewards consistency)
+        if num_sells > 0:
+            win_rate = trader.winning_sells / num_sells
+            # Squaring the win rate gives a much higher reward for high-consistency strategies
+            fitness += (win_rate ** 2) * WIN_RATE_SCALER
+
         genome.fitness = fitness
 
 
@@ -937,7 +936,7 @@ def run_neat_trader(config_file):
     )
     pop.add_reporter(checkpointer)
 
-    print("\nStarting NEAT evolution with Profit-Is-King Engine V11 Fitness Function...");
+    print("\nStarting NEAT evolution with Profit Quality Engine V13 Fitness Function...");
     winner = None
     try:
         winner = pop.run(eval_genomes, N_GENERATIONS)
@@ -1001,7 +1000,7 @@ def run_neat_trader(config_file):
 
     if best_genome_overall:
         output_dir = "neat_outputs"
-        winner_filename = f"winner_genome_attention_{TICKER.replace('/', '_')}_ProfitIsKingV11.pkl"
+        winner_filename = f"winner_genome_attention_{TICKER.replace('/', '_')}_ProfitQualityV13.pkl"
         winner_path = os.path.join(output_dir, winner_filename)
         with open(winner_path, "wb") as f:
             pickle.dump(best_genome_overall, f)
