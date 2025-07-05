@@ -1,3 +1,5 @@
+# trader.py
+
 import numpy as np
 import pandas as pd
 
@@ -21,9 +23,8 @@ class Trader:
         # This tracks steps since the last trade to give the agent a sense of time/duration.
         self.steps_since_last_trade = 0
         
-        # NEW: Counter for winning trades
+        # NEW: Counter for winning trades (profitable sells)
         self.winning_sells = 0
-
 
     def reset(self):
         self.credit = self.initial_credit
@@ -33,8 +34,7 @@ class Trader:
         self.trade_log = []
         self.total_cost_of_holdings = 0.0
         self.realized_gains_this_evaluation = 0.0
-        self.max_portfolio_value_achieved = self.get_portfolio_value(0)
-        if self.holdings_shares == 0: self.max_portfolio_value_achieved = self.initial_credit
+        self.max_portfolio_value_achieved = self.initial_credit
         self.total_fees_paid = 0.0
         self.steps_since_last_trade = 0
         # NEW: Reset counter
@@ -92,12 +92,13 @@ class Trader:
         net_cash_gained = gross_cash_from_sale - fee_for_this_sell
 
         avg_buy_price_of_sold_shares = self.get_average_buy_price()
+        # Cost basis for the shares being sold
         cost_of_shares_sold = avg_buy_price_of_sold_shares * actual_shares_to_sell
         
         profit_from_this_sell = net_cash_gained - cost_of_shares_sold
         self.realized_gains_this_evaluation += profit_from_this_sell
         
-        # NEW: Check if this was a winning trade
+        # NEW: Check if this was a winning trade (profit > 0)
         if profit_from_this_sell > 0:
             self.winning_sells += 1
 
@@ -165,7 +166,7 @@ class Trader:
             if avg_buy > 1e-6:
                 unrealized_pl_percentage = (current_price - avg_buy) / avg_buy
         
-        # Clip to a reasonable range like [-1, 2] to prevent extreme values
+        # Clip to a reasonable range like [-1, 2] to prevent extreme values from overpowering the network
         norm_unrealized_pl = np.clip(unrealized_pl_percentage, -1.0, 2.0)
 
         # Normalize steps since last trade. This helps the agent learn time-based strategies.
